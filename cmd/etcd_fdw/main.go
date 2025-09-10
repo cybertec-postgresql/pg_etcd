@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jessevdk/go-flags"
 	"github.com/sirupsen/logrus"
 	clientv3 "go.etcd.io/etcd/client/v3"
+
+	"github.com/cybertec-postgresql/etcd_fdw/internal/migrations"
 )
 
 // Config holds the application configuration
@@ -67,12 +70,44 @@ func main() {
 
 	ctx := context.Background()
 
-	// TODO: Connect to PostgreSQL
+	// Connect to PostgreSQL and run migrations
 	if config.PostgresDSN != "" {
-		_, err := pgxpool.New(ctx, config.PostgresDSN)
+		// First, create a single connection for migrations
+		conn, err := pgx.Connect(ctx, config.PostgresDSN)
 		if err != nil {
 			logrus.WithError(err).Fatal("Failed to connect to PostgreSQL")
 		}
+		defer func() {
+			if err := conn.Close(ctx); err != nil {
+				logrus.WithError(err).Error("Failed to close database connection")
+			}
+		}()
+
+		// Check if migrations are needed
+		needsMigration, err := migrations.NeedsUpgrade(ctx, conn)
+		if err != nil {
+			logrus.WithError(err).Fatal("Failed to check migration status")
+		}
+
+		if needsMigration {
+			logrus.Info("Applying database migrations...")
+			err = migrations.Apply(ctx, conn)
+			if err != nil {
+				logrus.WithError(err).Fatal("Failed to apply migrations")
+			}
+			logrus.Info("Database migrations completed successfully")
+		} else {
+			logrus.Info("Database schema is up to date")
+		}
+
+		// Now create the connection pool for normal operations
+		pool, err := pgxpool.New(ctx, config.PostgresDSN)
+		if err != nil {
+			logrus.WithError(err).Fatal("Failed to create PostgreSQL connection pool")
+		}
+		defer pool.Close()
+
+		logrus.Info("Connected to PostgreSQL successfully")
 	}
 
 	// TODO: Connect to etcd

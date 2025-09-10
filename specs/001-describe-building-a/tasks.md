@@ -29,7 +29,7 @@
 - [x] T004 [P] Configure GitHub Actions: go test, go build, linting workflows
 
 ## Phase 3.2: Database Schema & Infrastructure
-- [ ] T005 Create PostgreSQL schema file: migrations/001_create_tables.sql with etcd and etcd_wal tables
+- [x] T005 Create PostgreSQL schema file: migrations/001_create_tables.sql with etcd and etcd_wal tables
 - [ ] T006 Create PostgreSQL functions: migrations/002_create_functions.sql for get/set/delete with revision enforcement
 - [ ] T007 Create trigger and NOTIFY: migrations/003_create_triggers.sql for etcd_wal table notifications
 - [ ] T008 [P] Create testcontainers setup: tests/infrastructure_test.go for PostgreSQL and etcd containers

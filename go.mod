@@ -3,6 +3,7 @@ module github.com/cybertec-postgresql/etcd_fdw
 go 1.25
 
 require (
+	github.com/cybertec-postgresql/pgx-migrator v1.2.0
 	github.com/jackc/pgx/v5 v5.7.6
 	github.com/jessevdk/go-flags v1.6.1
 	github.com/sirupsen/logrus v1.9.3
