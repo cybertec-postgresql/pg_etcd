@@ -35,7 +35,7 @@ Simple etcd_fdw program that performs bidirectional synchronization between etcd
 **Language/Version**: Go 1.21+  
 **Primary Dependencies**: jackc/pgx/v5 (PostgreSQL driver), etcd-io/etcd/client/v3 (etcd client), jessevdk/go-flags (command line)  
 **Storage**: PostgreSQL with etcd and etcd_wal tables, etcd cluster  
-**Testing**: github.com/stretchr/testify, testcontainers/testcontainers-go (integration tests)  
+**Testing**: github.com/stretchr/testify, github.com/pashagolub/pgxmock, testcontainers/testcontainers-go (integration tests)  
 **Target Platform**: Linux server  
 **Project Type**: single - Simple Go binary with minimal packages  
 **Performance Goals**: Real-time synchronization, handle typical etcd workloads  

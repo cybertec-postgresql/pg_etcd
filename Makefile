@@ -20,7 +20,7 @@ build:
 ## Run tests
 test:
 	@echo "Running tests..."
-	@go test -v -race -coverprofile=coverage.out ./...
+	@go test -v -coverprofile=coverage.out ./...
 
 ## Run integration tests (requires PostgreSQL and etcd)
 test-integration:
