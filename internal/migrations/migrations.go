@@ -3,6 +3,7 @@ package migrations
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"sync"
 
@@ -10,38 +11,17 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+//go:embed 001_create_tables.sql
+var createTablesSQL string
+
 // migrations holds function returning all upgrade migrations needed
 var migrations func() migrator.Option = func() migrator.Option {
 	return migrator.Migrations(
 		&migrator.Migration{
 			Name: "001_create_tables",
 			Func: func(ctx context.Context, tx pgx.Tx) error {
-				// Create all tables and indexes in a single transaction
-				_, err := tx.Exec(ctx, `
-					-- Main etcd table for key-value storage with revision history
-					CREATE TABLE etcd (
-						ts timestamp with time zone NOT NULL DEFAULT now(),
-						key text NOT NULL,
-						value text,
-						revision bigint NOT NULL,
-						tombstone boolean NOT NULL DEFAULT false,
-						PRIMARY KEY(key, revision)
-					);
-
-					-- Write-ahead log table for tracking changes to be synchronized
-					CREATE TABLE etcd_wal (
-						id serial PRIMARY KEY,
-						ts timestamp with time zone NOT NULL DEFAULT now(),
-						key text NOT NULL,
-						value text,
-						revision bigint -- Current revision before modification (null = new key)
-					);
-
-					-- Performance indexes
-					CREATE INDEX idx_etcd_key_revision ON etcd(key, revision DESC);
-					CREATE INDEX idx_etcd_wal_key ON etcd_wal(key);
-					CREATE INDEX idx_etcd_wal_ts ON etcd_wal(ts);
-				`)
+				// Execute the embedded SQL file
+				_, err := tx.Exec(ctx, createTablesSQL)
 				return err
 			},
 		},
