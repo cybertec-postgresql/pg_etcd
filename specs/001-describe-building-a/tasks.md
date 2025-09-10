@@ -52,14 +52,14 @@
 
 ## Phase 3.4: Core Implementation (ONLY after tests are failing)
 
-- [ ] T016 CLI configuration: cmd/etcd_fdw/main.go with go-flags DSN parsing and help
-- [ ] T017 [P] PostgreSQL client: internal/db/postgres.go with pgx connection and LISTEN setup
-- [ ] T018 [P] etcd client: internal/etcd/client.go with watch setup and revision handling
-- [ ] T019 [P] Sync: internal/sync/sync.go use etcd_client.Watch() and pgx.CopyFrom() for sync
-- [ ] T020 etcd→PostgreSQL sync: with COPY operations
-- [ ] T021 PostgreSQL→etcd sync: with NOTIFY handling
-- [ ] T022 Conflict resolution: internal/sync/resolver.go implement "etcd wins" strategy
-- [ ] T023 Main sync loop: cmd/etcd_fdw/sync.go coordinate watchers and graceful shutdown
+- [x] T016 CLI configuration: cmd/etcd_fdw/main.go with go-flags DSN parsing and help
+- [x] T017 [P] PostgreSQL client: internal/db/postgres.go with pgx connection and LISTEN setup
+- [x] T018 [P] etcd client: internal/etcd/client.go with watch setup and revision handling
+- [x] T019 [P] Sync: internal/sync/sync.go use etcd_client.Watch() and pgx.CopyFrom() for sync
+- [x] T020 etcd→PostgreSQL sync: with COPY operations
+- [x] T021 PostgreSQL→etcd sync: with NOTIFY handling
+- [x] T022 Conflict resolution: Simplified "etcd wins" strategy (ConflictResolver removed as overkill)
+- [x] T023 Main sync loop: cmd/etcd_fdw/sync.go coordinate watchers and graceful shutdown
 
 ## Phase 3.5: Error Handling & Resilience
 

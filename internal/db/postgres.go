@@ -220,11 +220,11 @@ func GetPendingWALEntries(ctx context.Context, pool PgxIface) ([]WALEntry, error
 	return entries, nil
 }
 
-// DeleteWALEntry removes a processed WAL entry
-func DeleteWALEntry(ctx context.Context, pool PgxIface, key string, timestamp string) error {
-	query := `DELETE FROM etcd_wal WHERE key = $1 AND ts = $2`
+// UpdateWALEntry removes a processed WAL entry
+func UpdateWALEntry(ctx context.Context, pool PgxIface, key string, timestamp string, revision int64) error {
+	query := `UPDATE etcd_wal SET revision = $3 WHERE key = $1 AND ts = $2`
 
-	_, err := pool.Exec(ctx, query, key, timestamp)
+	_, err := pool.Exec(ctx, query, key, timestamp, revision)
 	if err != nil {
 		return fmt.Errorf("failed to delete WAL entry: %w", err)
 	}

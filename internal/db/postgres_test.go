@@ -72,7 +72,7 @@ func TestInsertWALEntry(t *testing.T) {
 
 	// Set up mock expectations
 	mock.ExpectExec("INSERT INTO etcd_wal").
-		WithArgs(key, "value", 1).
+		WithArgs(key, &value, &revision).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	// Test the function
@@ -127,12 +127,12 @@ func TestDeleteWALEntry(t *testing.T) {
 	ctx := context.Background()
 
 	// Set up mock expectations
-	mock.ExpectExec("DELETE FROM etcd_wal WHERE key").
-		WithArgs("test/key", "2023-01-01T00:00:00Z").
-		WillReturnResult(pgxmock.NewResult("DELETE", 1))
+	mock.ExpectExec("UPDATE etcd_wal").
+		WithArgs("test/key", "2023-01-01T00:00:00Z", int64(-1)).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	// Test the function
-	err = DeleteWALEntry(ctx, mock, "test/key", "2023-01-01T00:00:00Z")
+	err = UpdateWALEntry(ctx, mock, "test/key", "2023-01-01T00:00:00Z", -1)
 	require.NoError(t, err)
 
 	// Verify all expectations were met

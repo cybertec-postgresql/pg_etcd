@@ -6,6 +6,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/jessevdk/go-flags"
 	"github.com/sirupsen/logrus"
@@ -128,7 +130,19 @@ func main() {
 		logrus.WithError(err).Fatal("Failed to setup logging")
 	}
 
-	ctx := context.Background()
+	// Setup graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Setup signal handling for graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		sig := <-sigChan
+		logrus.WithField("signal", sig).Info("Received shutdown signal, initiating graceful shutdown...")
+		cancel()
+	}()
 
 	// Connect to PostgreSQL
 	var pgPool db.PgxPoolIface
@@ -153,7 +167,9 @@ func main() {
 
 	// Create and start sync service
 	syncService := sync.NewService(pgPool, etcdClient, prefix, config.DryRun)
-	if err := syncService.Start(ctx); err != nil {
+	if err := syncService.Start(ctx); err != nil && ctx.Err() == nil {
 		logrus.WithError(err).Fatal("Synchronization failed")
 	}
+
+	logrus.Info("Graceful shutdown completed")
 }

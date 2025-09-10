@@ -3,15 +3,19 @@ package sync
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/sirupsen/logrus"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
 	"github.com/cybertec-postgresql/etcd_fdw/internal/db"
 	"github.com/cybertec-postgresql/etcd_fdw/internal/etcd"
 )
+
+const InvalidRevision = -1
 
 // Service orchestrates bidirectional synchronization between etcd and PostgreSQL
 type Service struct {
@@ -224,7 +228,7 @@ func (s *Service) syncPostgreSQLToEtcd(ctx context.Context) error {
 			}
 
 			if err := s.processPostgreSQLNotification(ctx, notification); err != nil {
-				logrus.WithError(err).WithField("payload", "unknown").Error("Failed to process PostgreSQL notification")
+				logrus.WithError(err).WithField("payload", notification.Payload).Error("Failed to process PostgreSQL notification")
 				// Continue processing other notifications rather than failing entirely
 			}
 		}
@@ -232,17 +236,73 @@ func (s *Service) syncPostgreSQLToEtcd(ctx context.Context) error {
 }
 
 // processPostgreSQLNotification processes a PostgreSQL NOTIFY and syncs to etcd
-func (s *Service) processPostgreSQLNotification(ctx context.Context, notification interface{}) error {
-	// In a real implementation, we would parse the JSON payload to get WAL entry details
-	// For now, we'll log that we received the notification
-	logrus.WithField("notification", notification).Info("Received PostgreSQL notification")
+func (s *Service) processPostgreSQLNotification(ctx context.Context, notification *pgconn.Notification) error {
+	// Parse the JSON payload from the notification
+	var walNotification struct {
+		Key       string  `json:"key"`
+		Ts        string  `json:"ts"`
+		Value     *string `json:"value"`
+		Revision  *int64  `json:"revision"`
+		Operation string  `json:"operation"`
+	}
 
-	// TODO: Parse the notification and sync the change to etcd
-	// This would involve:
-	// 1. Parse notification JSON to get key, value, revision
-	// 2. Apply conflict resolution logic
-	// 3. Put/Delete to etcd
-	// 4. Mark WAL entry as processed
+	if err := json.Unmarshal([]byte(notification.Payload), &walNotification); err != nil {
+		return fmt.Errorf("failed to parse notification payload: %w", err)
+	}
 
-	return nil
+	logrus.WithFields(logrus.Fields{
+		"key":       walNotification.Key,
+		"ts":        walNotification.Ts,
+		"operation": walNotification.Operation,
+	}).Info("Processing PostgreSQL notification")
+
+	// Apply conflict resolution: check if etcd has a newer version
+	etcdKV, err := s.etcdClient.Get(ctx, walNotification.Key)
+	if err != nil {
+		return fmt.Errorf("failed to get key from etcd for conflict resolution: %w", err)
+	}
+
+	// Conflict resolution: etcd wins (if etcd has newer revision, skip this change)
+	if etcdKV != nil && walNotification.Revision != nil && etcdKV.Revision > *walNotification.Revision {
+		logrus.WithFields(logrus.Fields{
+			"key":            walNotification.Key,
+			"etcd_revision":  etcdKV.Revision,
+			"local_revision": *walNotification.Revision,
+		}).Warn("Conflict detected: etcd has newer revision, skipping local change")
+
+		// Mark WAL entry as failed (conflict resolved - etcd wins)
+		return db.UpdateWALEntry(ctx, s.pgPool, walNotification.Key, walNotification.Ts, InvalidRevision)
+	}
+
+	// Apply the change to etcd
+	var newRevision int64
+	switch walNotification.Operation {
+	case "CREATE", "UPDATE":
+		if walNotification.Value != nil {
+			resp, err := s.etcdClient.Put(ctx, walNotification.Key, *walNotification.Value)
+			if err != nil {
+				// Mark WAL entry as failed
+				db.UpdateWALEntry(ctx, s.pgPool, walNotification.Key, walNotification.Ts, InvalidRevision)
+				return fmt.Errorf("failed to put key to etcd: %w", err)
+			}
+			newRevision = resp.Header.Revision
+			logrus.WithField("key", walNotification.Key).Info("Synced PostgreSQL change to etcd (PUT)")
+		}
+	case "DELETE":
+		resp, err := s.etcdClient.Delete(ctx, walNotification.Key)
+		if err != nil {
+			// Mark WAL entry as failed
+			db.UpdateWALEntry(ctx, s.pgPool, walNotification.Key, walNotification.Ts, InvalidRevision)
+			return fmt.Errorf("failed to delete key from etcd: %w", err)
+		}
+		newRevision = resp.Header.Revision
+		logrus.WithField("key", walNotification.Key).Info("Synced PostgreSQL change to etcd (DELETE)")
+	default:
+		// Mark WAL entry as failed due to unknown operation
+		db.UpdateWALEntry(ctx, s.pgPool, walNotification.Key, walNotification.Ts, InvalidRevision)
+		return fmt.Errorf("unknown operation type: %s", walNotification.Operation)
+	}
+
+	// Mark WAL entry as successfully processed with the new etcd revision
+	return db.UpdateWALEntry(ctx, s.pgPool, walNotification.Key, walNotification.Ts, newRevision)
 }
