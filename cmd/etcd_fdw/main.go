@@ -1,3 +1,5 @@
+// Package main implements the etcd_fdw binary for bidirectional synchronization
+// between etcd and PostgreSQL.
 package main
 
 import (
@@ -21,13 +23,23 @@ type Config struct {
 	Help        bool   `short:"h" long:"help" description:"Show help message"`
 }
 
-var version = "dev"
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
 
 func main() {
 	// Quick check for version/help flags before full parsing
 	for _, arg := range os.Args[1:] {
 		if arg == "--version" || arg == "-v" {
 			fmt.Printf("etcd_fdw version %s\n", version)
+			if commit != "none" && commit != "" {
+				fmt.Printf("commit: %s\n", commit)
+			}
+			if date != "unknown" && date != "" {
+				fmt.Printf("built: %s\n", date)
+			}
 			os.Exit(0)
 		}
 	}

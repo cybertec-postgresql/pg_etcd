@@ -1,0 +1,43 @@
+version: 2
+
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - goconst
+    - gocyclo
+    - misspell
+    - dupl
+    - unconvert
+    - whitespace
+    - revive
+
+linters-settings:
+  gocyclo:
+    min-complexity: 15
+  dupl:
+    threshold: 100
+  goconst:
+    min-len: 2
+    min-occurrences: 2
+  misspell:
+    locale: US
+  revive:
+    rules:
+      - name: exported
+        disabled: true
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - goconst
+    - path: cmd/
+      linters:
+        - gocyclo

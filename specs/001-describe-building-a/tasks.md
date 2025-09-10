@@ -1,10 +1,10 @@
-# Tasks: Bidirectional Synchronization Between etcd and PostgreSQL
+# Tasks: Bidirectional Syn- [x] T002 Initialize go.mod with Go 1.25+ and dependencies: jackc/pgx/v5, etcd-io/etcd/client/v3, jessevdk/go-flags, logrushronization Between etcd and PostgreSQL
 
 **Input**: Design documents from `/specs/001-describe-building-a/`
 **Prerequisites**: plan.md, research.md, data-model.md, contracts/cli.md, quickstart.md
 
 ## Execution Flow (main)
-1. Load plan.md → Tech stack: Go 1.21+, jackc/pgx/v5, etcd-io/etcd/client/v3, jessevdk/go-flags
+1. Load plan.md → Tech stack: Go 1.25+, jackc/pgx/v5, etcd-io/etcd/client/v3, jessevdk/go-flags
 2. Load data-model.md → Entities: KeyValueRecord, WriteAheadLogEntry, SynchronizationEvent  
 3. Load contracts/cli.md → CLI: etcd_fdw command with DSN parameters
 4. Load quickstart.md → Test scenarios: bidirectional sync, conflict resolution
@@ -24,9 +24,9 @@
 ## Phase 3.1: Setup
 
 - [x] T001 Create Go project structure: cmd/etcd_fdw/, internal/{sync,db,etcd}/, tests/
-- [x] T002 Initialize go.mod with Go 1.21+ and dependencies: jackc/pgx/v5, etcd-io/etcd/client/v3, jessevdk/go-flags, logrus
-- [ ] T003 [P] Configure linting: golangci-lint.yml with deadcode, golint, govet
-- [ ] T004 [P] Configure GitHub Actions: go test, go build, linting workflows
+- [x] T002 Initialize go.mod with Go 1.25+ and dependencies: jackc/pgx/v5, etcd-io/etcd/client/v3, jessevdk/go-flags, logrus
+- [x] T003 [P] Configure linting: golangci-lint.yml with deadcode, golint, govet
+- [x] T004 [P] Configure GitHub Actions: go test, go build, linting workflows
 
 ## Phase 3.2: Database Schema & Infrastructure
 - [ ] T005 Create PostgreSQL schema file: migrations/001_create_tables.sql with etcd and etcd_wal tables

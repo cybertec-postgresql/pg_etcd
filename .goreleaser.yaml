@@ -1,0 +1,42 @@
+version: 2
+
+builds:
+- main: ./cmd/etcd_fdw
+  env:
+    - CGO_ENABLED=0
+  goos:
+    - linux
+    - darwin
+    - windows
+  goarch:
+    - amd64
+    - arm64
+  ldflags:
+    - -s -w
+    - -X main.version={{.Version}}
+    - -X main.commit={{.Commit}}
+    - -X main.date={{.Date}}
+
+archives:
+- name_template: >-
+      {{ .ProjectName }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else }}{{ .Arch }}{{ end }}
+  wrap_in_directory: true
+  format_overrides:
+    - goos: windows
+      formats: ['zip']
+  files:
+    - "./README.md"
+    - "LICENSE*"
+
+checksum:
+  name_template: 'checksums.txt'
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
