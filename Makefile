@@ -5,7 +5,7 @@
 # Build variables
 BINARY_NAME=etcd_fdw
 VERSION?=dev
-BUILD_DIR=build
+BUILD_DIR=.
 LDFLAGS=-ldflags="-X main.version=$(VERSION)"
 
 # Default target
