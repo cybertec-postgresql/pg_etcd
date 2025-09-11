@@ -2,27 +2,18 @@
 CREATE TABLE etcd (
 	ts timestamp with time zone NOT NULL DEFAULT now(),
 	key text NOT NULL,
-	value text,
+	value text NOT NULL,
 	revision bigint NOT NULL,
 	tombstone boolean NOT NULL DEFAULT false,
 	PRIMARY KEY(key, revision)
 );
 
--- Write-ahead log table for tracking changes to be synchronized
-CREATE TABLE etcd_wal (
-	ts timestamp with time zone NOT NULL DEFAULT now(),
-	key text NOT NULL,
-	value text,
-	revision bigint, -- Current revision before modification (null = new key)
-	PRIMARY KEY(key, ts)
-);
 
 -- Performance indexes
-CREATE INDEX idx_etcd_key_revision ON etcd(key, revision DESC);
-CREATE INDEX idx_etcd_wal_key ON etcd_wal(key);
-CREATE INDEX idx_etcd_wal_ts ON etcd_wal(ts);
+CREATE INDEX idx_etcd_ts ON etcd(ts);
+CREATE INDEX idx_etcd_pending ON etcd(key) WHERE revision = -1;
 
--- Function: Get latest value for a key with revision enforcement
+-- Function: Get latest value for a key
 CREATE OR REPLACE FUNCTION etcd_get(p_key text)
 RETURNS TABLE(key text, value text, revision bigint, tombstone boolean, ts timestamp with time zone)
 LANGUAGE sql STABLE AS $$
@@ -43,47 +34,48 @@ LANGUAGE sql STABLE AS $$
 	ORDER BY e.revision ASC;
 $$;
 
--- Function: Set key-value (logs to WAL for synchronization to etcd)
-CREATE OR REPLACE FUNCTION etcd_set(p_key text, p_value text)
+-- Function: Insert record with pending status (revision = -1)
+-- Applications use this to insert data that needs sync to etcd
+CREATE OR REPLACE FUNCTION etcd_put(p_key text, p_value text)
 RETURNS timestamp with time zone
 LANGUAGE sql AS $$
-	INSERT INTO etcd_wal (key, value, revision)
-	SELECT p_key, p_value, (SELECT revision FROM etcd_get(p_key))
+	INSERT INTO etcd (key, value, revision, tombstone)
+	VALUES (p_key, p_value, -1, false)
 	RETURNING ts;
 $$;
 
--- Function: Delete key (logs to WAL for synchronization to etcd)
+-- Function: Mark key for deletion with pending status
 CREATE OR REPLACE FUNCTION etcd_delete(p_key text)
 RETURNS timestamp with time zone
 LANGUAGE sql AS $$
-	INSERT INTO etcd_wal (key, value, revision)
-	SELECT p_key, NULL, (SELECT revision FROM etcd_get(p_key))
+	INSERT INTO etcd (key, value, revision, tombstone)
+	VALUES (p_key, NULL, -1, true)
 	RETURNING ts;
 $$;
 
--- Trigger function to notify on WAL changes
-CREATE OR REPLACE FUNCTION notify_etcd_change()
-RETURNS TRIGGER AS $$
-BEGIN
-	PERFORM pg_notify('etcd_changes', 
-		json_build_object(
-			'key', NEW.key,
-			'ts', NEW.ts,
-			'value', NEW.value,
-			'revision', NEW.revision,
-			'operation', CASE 
-				WHEN NEW.value IS NULL THEN 'DELETE'
-				WHEN NEW.revision IS NULL THEN 'CREATE'
-				ELSE 'UPDATE'
-			END
-		)::text
-	);
-	RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
+-- Function: Get pending records for sync to etcd
+CREATE OR REPLACE FUNCTION etcd_get_pending()
+RETURNS TABLE(key text, value text, ts timestamp with time zone, tombstone boolean)
+LANGUAGE sql STABLE AS $$
+	SELECT e.key, e.value, e.ts, e.tombstone
+	FROM etcd e
+	WHERE e.revision = -1
+	ORDER BY e.ts ASC;
+$$;
 
--- Trigger on WAL table for real-time notifications
-CREATE TRIGGER etcd_wal_notify
-	AFTER INSERT ON etcd_wal
-	FOR EACH ROW
-	EXECUTE FUNCTION notify_etcd_change();
+-- Function: Update revision after successful sync to etcd
+CREATE OR REPLACE FUNCTION etcd_update_revision(p_key text, p_timestamp timestamp with time zone, p_revision bigint)
+RETURNS boolean
+LANGUAGE plpgsql AS $$
+DECLARE
+    row_count integer;
+BEGIN
+    UPDATE etcd 
+    SET revision = p_revision 
+    WHERE key = p_key AND ts = p_timestamp AND revision = -1;
+    
+    GET DIAGNOSTICS row_count = ROW_COUNT;
+    RETURN row_count > 0;
+END;
+$$;
+

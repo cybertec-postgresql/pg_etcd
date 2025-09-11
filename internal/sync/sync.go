@@ -3,11 +3,9 @@ package sync
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/sirupsen/logrus"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
@@ -20,29 +18,24 @@ const InvalidRevision = -1
 
 // Service orchestrates bidirectional synchronization between etcd and PostgreSQL
 type Service struct {
-	pgPool     db.PgxPoolIface
-	etcdClient *etcd.EtcdClient
-	prefix     string
-	dryRun     bool
+	pgPool          db.PgxPoolIface
+	etcdClient      *etcd.EtcdClient
+	prefix          string
+	pollingInterval time.Duration
 }
 
 // NewService creates a new synchronization service
-func NewService(pgPool db.PgxPoolIface, etcdClient *etcd.EtcdClient, prefix string, dryRun bool) *Service {
+func NewService(pgPool db.PgxPoolIface, etcdClient *etcd.EtcdClient, prefix string, pollingInterval time.Duration) *Service {
 	return &Service{
-		pgPool:     pgPool,
-		etcdClient: etcdClient,
-		prefix:     prefix,
-		dryRun:     dryRun,
+		pgPool:          pgPool,
+		etcdClient:      etcdClient,
+		prefix:          prefix,
+		pollingInterval: pollingInterval,
 	}
 }
 
 // Start begins the bidirectional synchronization process
 func (s *Service) Start(ctx context.Context) error {
-	if s.dryRun {
-		logrus.Info("Dry run mode - would start bidirectional sync")
-		return nil
-	}
-
 	logrus.Info("Starting etcd_fdw bidirectional synchronization")
 
 	// Perform initial sync from etcd to PostgreSQL
@@ -95,7 +88,7 @@ func (s *Service) initialSync(ctx context.Context) error {
 			Key:       pair.Key,
 			Value:     pair.Value,
 			Revision:  pair.Revision,
-			Timestamp: time.Now().Format(time.RFC3339),
+			Ts:        time.Now(),
 			Tombstone: pair.Tombstone,
 		}
 	}
@@ -168,12 +161,12 @@ func (s *Service) processEtcdEvent(ctx context.Context, event *clientv3.Event) e
 	var record db.KeyValueRecord
 	record.Key = key
 	record.Revision = revision
-	record.Timestamp = time.Now().Format(time.RFC3339)
+	record.Ts = time.Now()
 
 	switch event.Type {
 	case clientv3.EventTypePut:
 		value := string(event.Kv.Value)
-		record.Value = &value
+		record.Value = value
 		record.Tombstone = false
 		logrus.WithFields(logrus.Fields{
 			"key":      key,
@@ -182,7 +175,7 @@ func (s *Service) processEtcdEvent(ctx context.Context, event *clientv3.Event) e
 		}).Debug("Processing etcd PUT event")
 
 	case clientv3.EventTypeDelete:
-		record.Value = nil
+		record.Value = ""
 		record.Tombstone = true
 		logrus.WithFields(logrus.Fields{
 			"key":      key,
@@ -208,109 +201,66 @@ func (s *Service) processEtcdEvent(ctx context.Context, event *clientv3.Event) e
 	return nil
 }
 
-// syncPostgreSQLToEtcd listens for PostgreSQL WAL notifications and syncs to etcd
+// syncPostgreSQLToEtcd polls for pending records and syncs them to etcd
 func (s *Service) syncPostgreSQLToEtcd(ctx context.Context) error {
-	logrus.Info("Starting PostgreSQL to etcd sync listener")
+	logrus.Info("Starting PostgreSQL to etcd sync poller with polling mechanism")
 
-	// Set up LISTEN connection for WAL notifications
-	conn, err := db.SetupListen(ctx, s.pgPool, "etcd_changes")
-	if err != nil {
-		return fmt.Errorf("failed to setup PostgreSQL LISTEN: %w", err)
-	}
-	defer conn.Close(ctx)
+	ticker := time.NewTicker(s.pollingInterval)
+	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		default:
-			// Wait for notification with timeout
-			notification, err := conn.WaitForNotification(ctx)
-			if err != nil {
-				// Check if it's a timeout or context cancellation
-				if ctx.Err() != nil {
-					return ctx.Err()
-				}
-				logrus.WithError(err).Warn("PostgreSQL notification wait error")
-				continue
-			}
-
-			if err := retry.WithOperation(ctx, retry.PostgreSQLDefaults(), func() error {
-				return s.processPostgreSQLNotification(ctx, notification)
-			}, "process_pg_notification"); err != nil {
-				logrus.WithError(err).WithField("payload", notification.Payload).Error("Failed to process PostgreSQL notification after retries")
-				// Continue processing other notifications rather than failing entirely
+		case <-ticker.C:
+			if err := s.pollAndProcessPendingRecords(ctx); err != nil {
+				logrus.WithError(err).Error("Failed to poll and process pending records")
 			}
 		}
 	}
 }
 
-// processPostgreSQLNotification processes a PostgreSQL NOTIFY and syncs to etcd
-func (s *Service) processPostgreSQLNotification(ctx context.Context, notification *pgconn.Notification) error {
-	// Parse the JSON payload from the notification
-	var walNotification struct {
-		Key       string  `json:"key"`
-		Ts        string  `json:"ts"`
-		Value     *string `json:"value"`
-		Revision  *int64  `json:"revision"`
-		Operation string  `json:"operation"`
-	}
-
-	if err := json.Unmarshal([]byte(notification.Payload), &walNotification); err != nil {
-		return fmt.Errorf("failed to parse notification payload: %w", err)
-	}
-
-	logrus.WithFields(logrus.Fields{
-		"key":       walNotification.Key,
-		"ts":        walNotification.Ts,
-		"operation": walNotification.Operation,
-	}).Info("Processing PostgreSQL notification")
-
-	// Apply conflict resolution: check if etcd has a newer version
-	etcdKV, err := s.etcdClient.Get(ctx, walNotification.Key)
+func (s *Service) pollAndProcessPendingRecords(ctx context.Context) error {
+	// Get pending records (revision = -1) using SELECT FOR UPDATE SKIP LOCKED
+	pendingRecords, err := db.GetPendingRecords(ctx, s.pgPool)
 	if err != nil {
-		return fmt.Errorf("failed to get key from etcd for conflict resolution: %w", err)
+		return fmt.Errorf("failed to get pending records: %w", err)
 	}
 
-	// Conflict resolution: etcd wins (if etcd has newer revision, skip this change)
-	if etcdKV != nil && walNotification.Revision != nil && etcdKV.Revision > *walNotification.Revision {
-		logrus.WithFields(logrus.Fields{
-			"key":            walNotification.Key,
-			"etcd_revision":  etcdKV.Revision,
-			"local_revision": *walNotification.Revision,
-		}).Warn("Conflict detected: etcd has newer revision, skipping local change")
-
-		// Mark WAL entry as failed (conflict resolved - etcd wins)
-		return db.UpdateWALEntry(ctx, s.pgPool, walNotification.Key, walNotification.Ts, InvalidRevision)
+	if len(pendingRecords) == 0 {
+		return nil // No pending records to process
 	}
+
+	logrus.WithField("count", len(pendingRecords)).Debug("Found pending records to sync to etcd")
+
+	// Process each pending record with retry logic
+	for _, record := range pendingRecords {
+		err := retry.WithOperation(ctx, retry.PostgreSQLDefaults(), func() error {
+			return s.processPendingRecord(ctx, record)
+		}, "process_pending_record")
+
+		if err != nil {
+			logrus.WithError(err).WithField("key", record.Key).Error("Failed to process pending record after retries")
+			// Continue processing other records rather than failing entirely
+		}
+	}
+
+	return nil
+}
+
+// processPendingRecord processes a single pending record and syncs it to etcd
+func (s *Service) processPendingRecord(ctx context.Context, record db.KeyValueRecord) error {
+	logrus.WithFields(logrus.Fields{
+		"key":       record.Key,
+		"tombstone": record.Tombstone,
+	}).Debug("Processing pending record")
 
 	// Apply the change to etcd with retry logic
 	var newRevision int64
-	switch walNotification.Operation {
-	case "CREATE", "UPDATE":
-		if walNotification.Value != nil {
-			err := etcd.RetryEtcdOperation(ctx, func() error {
-				resp, putErr := s.etcdClient.Put(ctx, walNotification.Key, *walNotification.Value)
-				if putErr != nil {
-					return putErr
-				}
-				newRevision = resp.Header.Revision
-				return nil
-			}, "etcd_put")
-
-			if err != nil {
-				logrus.WithError(err).WithFields(logrus.Fields{
-					"key":       walNotification.Key,
-					"timestamp": walNotification.Ts,
-					"operation": "etcd_put",
-				}).Error("Failed to sync to etcd after retries")
-				return fmt.Errorf("failed to put key to etcd: %w", err)
-			}
-			logrus.WithField("key", walNotification.Key).Info("Synced PostgreSQL change to etcd (PUT)")
-		}
-	case "DELETE":
+	if record.Tombstone {
+		// Delete operation
 		err := etcd.RetryEtcdOperation(ctx, func() error {
-			resp, delErr := s.etcdClient.Delete(ctx, walNotification.Key)
+			resp, delErr := s.etcdClient.Delete(ctx, record.Key)
 			if delErr != nil {
 				return delErr
 			}
@@ -320,23 +270,41 @@ func (s *Service) processPostgreSQLNotification(ctx context.Context, notificatio
 
 		if err != nil {
 			logrus.WithError(err).WithFields(logrus.Fields{
-				"key":       walNotification.Key,
-				"timestamp": walNotification.Ts,
+				"key":       record.Key,
 				"operation": "etcd_delete",
-			}).Error("Failed to sync to etcd after retries")
+			}).Error("Failed to sync delete to etcd after retries")
 			return fmt.Errorf("failed to delete key from etcd: %w", err)
 		}
-		logrus.WithField("key", walNotification.Key).Info("Synced PostgreSQL change to etcd (DELETE)")
-	default:
-		// Log unknown operation type
+
 		logrus.WithFields(logrus.Fields{
-			"key":       walNotification.Key,
-			"timestamp": walNotification.Ts,
-			"operation": walNotification.Operation,
-		}).Error("Unknown operation type")
-		return fmt.Errorf("unknown operation type: %s", walNotification.Operation)
+			"key":      record.Key,
+			"revision": newRevision,
+		}).Info("Synced PostgreSQL change to etcd (DELETE)")
+	} else {
+		// Put operation
+		err := etcd.RetryEtcdOperation(ctx, func() error {
+			resp, putErr := s.etcdClient.Put(ctx, record.Key, record.Value)
+			if putErr != nil {
+				return putErr
+			}
+			newRevision = resp.Header.Revision
+			return nil
+		}, "etcd_put")
+
+		if err != nil {
+			logrus.WithError(err).WithFields(logrus.Fields{
+				"key":       record.Key,
+				"operation": "etcd_put",
+			}).Error("Failed to sync put to etcd after retries")
+			return fmt.Errorf("failed to put key to etcd: %w", err)
+		}
+
+		logrus.WithFields(logrus.Fields{
+			"key":      record.Key,
+			"revision": newRevision,
+		}).Info("Synced PostgreSQL change to etcd (PUT)")
 	}
 
-	// Mark WAL entry as successfully processed with the new etcd revision
-	return db.UpdateWALEntry(ctx, s.pgPool, walNotification.Key, walNotification.Ts, newRevision)
+	// Update local record with the new etcd revision
+	return db.UpdateRevision(ctx, s.pgPool, record.Key, newRevision)
 }

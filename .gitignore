@@ -82,3 +82,10 @@ dist/
 *.bak
 *.backup
 *.orig
+
+#  Spec-kit files
+templates/
+specs/
+memory/
+scripts/
+.github/prompts/

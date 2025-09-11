@@ -27,9 +27,10 @@ func TestCLIParsing(t *testing.T) {
 			},
 			wantErr: false,
 			expected: Config{
-				PostgresDSN: "postgres://user:pass@localhost:5432/db",
-				EtcdDSN:     "etcd://localhost:2379/",
-				LogLevel:    "info", // default value
+				PostgresDSN:     "postgres://user:pass@localhost:5432/db",
+				EtcdDSN:         "etcd://localhost:2379/",
+				LogLevel:        "info", // default value
+				PollingInterval: "1s",   // default value
 			},
 		},
 		{
@@ -40,18 +41,10 @@ func TestCLIParsing(t *testing.T) {
 			},
 			wantErr: false,
 			expected: Config{
-				PostgresDSN: "postgres://user:pass@localhost:5432/db",
-				EtcdDSN:     "etcd://localhost:2379,localhost:2380,localhost:2381/",
-				LogLevel:    "info", // default value
-			},
-		},
-		{
-			name:    "help flag",
-			args:    []string{"--help"},
-			wantErr: false,
-			expected: Config{
-				Help:     true,
-				LogLevel: "info", // default value
+				PostgresDSN:     "postgres://user:pass@localhost:5432/db",
+				EtcdDSN:         "etcd://localhost:2379,localhost:2380,localhost:2381/",
+				LogLevel:        "info", // default value
+				PollingInterval: "1s",   // default value
 			},
 		},
 		{
@@ -59,8 +52,9 @@ func TestCLIParsing(t *testing.T) {
 			args:    []string{"--version"},
 			wantErr: false,
 			expected: Config{
-				Version:  true,
-				LogLevel: "info", // default value
+				Version:         true,
+				LogLevel:        "info", // default value
+				PollingInterval: "1s",   // default value
 			},
 		},
 		{
@@ -71,12 +65,12 @@ func TestCLIParsing(t *testing.T) {
 				"--log-level", "debug",
 				"--dry-run",
 			},
-			wantErr: false,
+			wantErr: true, // dry-run not implemented
 			expected: Config{
-				PostgresDSN: "postgres://user:pass@localhost:5432/db",
-				EtcdDSN:     "etcd://localhost:2379/",
-				LogLevel:    "debug",
-				DryRun:      true,
+				PostgresDSN:     "postgres://user:pass@localhost:5432/db",
+				EtcdDSN:         "etcd://localhost:2379/",
+				LogLevel:        "debug",
+				PollingInterval: "1s", // default value
 			},
 		},
 		{
@@ -87,9 +81,10 @@ func TestCLIParsing(t *testing.T) {
 			},
 			wantErr: false,
 			expected: Config{
-				PostgresDSN: "postgres://user:pass@localhost:5432/db",
-				EtcdDSN:     "etcd://localhost:2379/config/?tls=enabled&dial_timeout=5s",
-				LogLevel:    "info", // default value
+				PostgresDSN:     "postgres://user:pass@localhost:5432/db",
+				EtcdDSN:         "etcd://localhost:2379/config/?tls=enabled&dial_timeout=5s",
+				LogLevel:        "info", // default value
+				PollingInterval: "1s",   // default value
 			},
 		},
 		{
@@ -101,9 +96,10 @@ func TestCLIParsing(t *testing.T) {
 			},
 			wantErr: false,
 			expected: Config{
-				PostgresDSN: "postgres://user:pass@localhost:5432/db",
-				EtcdDSN:     "etcd://localhost:2379/",
-				LogLevel:    "warn",
+				PostgresDSN:     "postgres://user:pass@localhost:5432/db",
+				EtcdDSN:         "etcd://localhost:2379/",
+				LogLevel:        "warn",
+				PollingInterval: "1s", // default value
 			},
 		},
 	}

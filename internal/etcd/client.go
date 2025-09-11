@@ -80,7 +80,7 @@ func (c *EtcdClient) GetAllKeys(ctx context.Context, prefix string) ([]KeyValueP
 		value := string(kv.Value)
 		pairs[i] = KeyValuePair{
 			Key:       string(kv.Key),
-			Value:     &value,
+			Value:     value,
 			Revision:  kv.ModRevision,
 			Tombstone: false,
 		}
@@ -142,7 +142,7 @@ func (c *EtcdClient) Get(ctx context.Context, key string) (*KeyValuePair, error)
 
 	return &KeyValuePair{
 		Key:       string(kv.Key),
-		Value:     &value,
+		Value:     value,
 		Revision:  kv.ModRevision,
 		Tombstone: false,
 	}, nil
@@ -151,7 +151,7 @@ func (c *EtcdClient) Get(ctx context.Context, key string) (*KeyValuePair, error)
 // KeyValuePair represents a key-value pair from etcd
 type KeyValuePair struct {
 	Key       string
-	Value     *string // nullable for tombstones
+	Value     string // nullable for tombstones
 	Revision  int64
 	Tombstone bool
 }
@@ -228,24 +228,17 @@ func parseEtcdDSN(dsn string) (*clientv3.Config, error) {
 
 // GetPrefix extracts the prefix from the etcd DSN path
 func GetPrefix(dsn string) string {
-	if dsn == "" {
+	if dsn == "" || !strings.HasPrefix(dsn, "etcd://") {
 		return "/"
 	}
-
-	if !strings.HasPrefix(dsn, "etcd://") {
-		return "/"
-	}
-
-	// Remove etcd:// prefix
-	dsn = strings.TrimPrefix(dsn, "etcd://")
 
 	// Parse as URL to extract path
-	u, err := url.Parse("dummy://" + dsn)
+	u, err := url.Parse(dsn)
 	if err != nil {
 		return "/"
 	}
 
-	if u.Path == "" || u.Path == "/" {
+	if u.Path == "" {
 		return "/"
 	}
 

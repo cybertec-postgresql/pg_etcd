@@ -8,23 +8,25 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/jessevdk/go-flags"
 	"github.com/sirupsen/logrus"
 
 	"github.com/cybertec-postgresql/etcd_fdw/internal/db"
 	"github.com/cybertec-postgresql/etcd_fdw/internal/etcd"
+	"github.com/cybertec-postgresql/etcd_fdw/internal/log"
 	"github.com/cybertec-postgresql/etcd_fdw/internal/sync"
 )
 
 // Config holds the application configuration
 type Config struct {
-	PostgresDSN string `short:"p" long:"postgres-dsn" description:"PostgreSQL connection string"`
-	EtcdDSN     string `short:"e" long:"etcd-dsn" description:"etcd connection string"`
-	LogLevel    string `short:"l" long:"log-level" description:"Log level: debug|info|warn|error" default:"info"`
-	DryRun      bool   `long:"dry-run" description:"Show what would be done without executing"`
-	Version     bool   `short:"v" long:"version" description:"Show version information"`
-	Help        bool   `short:"h" long:"help" description:"Show help message"`
+	PostgresDSN     string `short:"p" env:"ETCD_FDW_POSTGRES_DSN" long:"postgres-dsn" description:"PostgreSQL connection string"`
+	EtcdDSN         string `short:"e" env:"ETCD_FDW_ETCD_DSN" long:"etcd-dsn" description:"etcd connection string"`
+	LogLevel        string `short:"l" env:"ETCD_FDW_LOG_LEVEL" long:"log-level" description:"Log level: debug|info|warn|error" default:"info"`
+	PollingInterval string `long:"polling-interval" description:"Polling interval for PostgreSQL to etcd sync" default:"1s"`
+	Version         bool   `short:"v" long:"version" description:"Show version information"`
+	Help            bool
 }
 
 var (
@@ -34,55 +36,24 @@ var (
 )
 
 // ParseCLI parses command-line arguments and returns the configuration
-func ParseCLI(args []string) (*Config, error) {
-	var config Config
-	// Set default log level
-	config.LogLevel = "info"
-
-	parser := flags.NewParser(&config, flags.Default)
-	parser.Name = "etcd_fdw"
-	parser.Usage = "[options]"
-
-	// Check for environment variables
-	if envPostgresDSN := os.Getenv("ETCD_FDW_POSTGRES_DSN"); envPostgresDSN != "" {
-		config.PostgresDSN = envPostgresDSN
-	}
-	if envEtcdDSN := os.Getenv("ETCD_FDW_ETCD_DSN"); envEtcdDSN != "" {
-		config.EtcdDSN = envEtcdDSN
-	}
-	if envLogLevel := os.Getenv("ETCD_FDW_LOG_LEVEL"); envLogLevel != "" {
-		config.LogLevel = envLogLevel
-	}
-	if envDryRun := os.Getenv("ETCD_FDW_DRY_RUN"); envDryRun == "true" {
-		config.DryRun = true
-	}
-
-	// Parse the provided arguments instead of os.Args
-	if args != nil {
-		// Check for help/version flags first to avoid required flag errors
-		for _, arg := range args {
-			if arg == "--help" || arg == "-h" {
-				config.Help = true
-				return &config, nil
-			}
-			if arg == "--version" || arg == "-v" {
-				config.Version = true
-				return &config, nil
-			}
+func ParseCLI(args []string) (cmdOpts *Config, err error) {
+	cmdOpts = new(Config)
+	parser := flags.NewParser(cmdOpts, flags.HelpFlag)
+	parser.SubcommandsOptional = true            // if not command specified, start monitoring
+	nonParsedArgs, err := parser.ParseArgs(args) // parse and execute subcommand if any
+	if err != nil {
+		if flagsErr, ok := err.(*flags.Error); ok && flagsErr.Type == flags.ErrHelp {
+			cmdOpts.Help = true
 		}
-
-		_, err := parser.ParseArgs(args)
-		if err != nil {
-			return nil, err
+		if !flags.WroteHelp(err) {
+			parser.WriteHelp(os.Stdout)
 		}
-	} else {
-		_, err := parser.Parse()
-		if err != nil {
-			return nil, err
-		}
+		return cmdOpts, err
 	}
-
-	return &config, nil
+	if len(nonParsedArgs) > 0 { // we don't expect any non-parsed arguments
+		return cmdOpts, fmt.Errorf("unknown argument(s): %v", nonParsedArgs)
+	}
+	return
 }
 
 // ShowVersion prints version information and exits
@@ -106,15 +77,7 @@ func SetupLogging(logLevel string) error {
 	logrus.SetLevel(level)
 
 	// Configure formatter with consistent structure
-	logrus.SetFormatter(&logrus.JSONFormatter{
-		TimestampFormat:   "2006-01-02T15:04:05.000Z07:00",
-		DisableHTMLEscape: true,
-		FieldMap: logrus.FieldMap{
-			logrus.FieldKeyTime:  "timestamp",
-			logrus.FieldKeyLevel: "level",
-			logrus.FieldKeyMsg:   "message",
-		},
-	})
+	logrus.SetFormatter(log.NewFormatter(false))
 
 	// Add common fields to all log entries
 	logrus.SetReportCaller(false) // Keep simple, don't include caller info
@@ -130,7 +93,7 @@ func SetupLogging(logLevel string) error {
 }
 
 func main() {
-	// Quick check for version/help flags before full parsing
+	// Quick check for version flags before full parsing
 	for _, arg := range os.Args[1:] {
 		if arg == "--version" || arg == "-v" {
 			ShowVersion()
@@ -139,12 +102,13 @@ func main() {
 	}
 
 	// Parse CLI arguments
-	config, err := ParseCLI(nil) // nil means use os.Args
+	config, err := ParseCLI(os.Args)
 	if err != nil {
 		if flagsErr, ok := err.(*flags.Error); ok && flagsErr.Type == flags.ErrHelp {
 			os.Exit(0)
 		}
-		logrus.WithError(err).Fatal("Failed to parse command line arguments")
+		fmt.Printf("Error: %s\n", err)
+		os.Exit(1)
 	}
 
 	// Setup logging
@@ -187,8 +151,14 @@ func main() {
 	// Get prefix from etcd DSN
 	prefix := etcd.GetPrefix(config.EtcdDSN)
 
+	// Parse polling interval
+	pollingInterval, err := time.ParseDuration(config.PollingInterval)
+	if err != nil {
+		logrus.WithError(err).Fatal("Invalid polling interval format")
+	}
+
 	// Create and start sync service
-	syncService := sync.NewService(pgPool, etcdClient, prefix, config.DryRun)
+	syncService := sync.NewService(pgPool, etcdClient, prefix, pollingInterval)
 	if err := syncService.Start(ctx); err != nil && ctx.Err() == nil {
 		logrus.WithError(err).Fatal("Synchronization failed")
 	}

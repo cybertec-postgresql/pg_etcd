@@ -48,7 +48,6 @@ func (c *EtcdClient) WatchWithRecovery(ctx context.Context, prefix string, start
 	go func() {
 		defer close(watchChan)
 
-		config := retry.EtcdDefaults()
 		currentRevision := startRevision
 
 		for {
@@ -101,17 +100,8 @@ func (c *EtcdClient) WatchWithRecovery(ctx context.Context, prefix string, start
 					break
 				}
 
-				// Apply exponential backoff before restarting
-				err := retry.WithOperation(ctx, config, func() error {
-					logrus.WithField("revision", currentRevision).Info("Restarting etcd watch")
-					time.Sleep(time.Second) // Simple delay before restart
-					return nil
-				}, "watch-restart")
-
-				if err != nil {
-					logrus.WithError(err).Error("Failed to restart etcd watch")
-					return
-				}
+				logrus.WithField("revision", currentRevision).Info("Restarting etcd watch")
+				time.Sleep(time.Second) // Simple delay before restart
 			}
 		}
 	}()

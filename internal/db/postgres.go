@@ -9,7 +9,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/sirupsen/logrus"
 
@@ -19,9 +18,9 @@ import (
 // PgxIface is common interface for every pgx class
 type PgxIface interface {
 	Begin(ctx context.Context) (pgx.Tx, error)
-	Exec(context.Context, string, ...interface{}) (pgconn.CommandTag, error)
-	QueryRow(context.Context, string, ...interface{}) pgx.Row
-	Query(ctx context.Context, query string, args ...interface{}) (pgx.Rows, error)
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
+	Query(ctx context.Context, query string, args ...any) (pgx.Rows, error)
 	CopyFrom(ctx context.Context, tableName pgx.Identifier, columnNames []string, rowSrc pgx.CopyFromSource) (int64, error)
 }
 
@@ -95,47 +94,16 @@ func ApplyMigrations(ctx context.Context, conn *pgx.Conn) error {
 	return nil
 }
 
-// SetupListen sets up PostgreSQL LISTEN for WAL notifications
-func SetupListen(ctx context.Context, pool PgxPoolIface, channel string) (*pgx.Conn, error) {
-	// Get DSN from the pool config
-	config := pool.Config()
-	dsn := config.ConnString()
-
-	conn, err := pgx.Connect(ctx, dsn)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create LISTEN connection: %w", err)
-	}
-
-	_, err = conn.Exec(ctx, "LISTEN "+channel)
-	if err != nil {
-		conn.Close(ctx)
-		return nil, fmt.Errorf("failed to setup LISTEN: %w", err)
-	}
-
-	logrus.WithField("channel", channel).Info("PostgreSQL LISTEN setup successfully")
-	return conn, nil
-}
-
 // BulkInsert performs bulk insert of key-value records using COPY
 func BulkInsert(ctx context.Context, pool PgxIface, records []KeyValueRecord) error {
-	// Prepare data for COPY
-	rows := make([][]interface{}, len(records))
-	for i, record := range records {
-		rows[i] = []interface{}{
-			record.Timestamp,
-			record.Key,
-			record.Value,
-			record.Revision,
-			record.Tombstone,
-		}
-	}
-
 	// Use COPY for efficient bulk insert
 	_, err := pool.CopyFrom(
 		ctx,
 		pgx.Identifier{"etcd"},
 		[]string{"ts", "key", "value", "revision", "tombstone"},
-		pgx.CopyFromRows(rows),
+		pgx.CopyFromSlice(len(records), func(i int) ([]any, error) {
+			return []any{records[i].Ts, records[i].Key, records[i].Value, records[i].Revision, records[i].Tombstone}, nil
+		}),
 	)
 
 	if err != nil {
@@ -146,91 +114,71 @@ func BulkInsert(ctx context.Context, pool PgxIface, records []KeyValueRecord) er
 	return nil
 }
 
-// KeyValueRecord represents a key-value record in the etcd table
+// KeyValueRecord represents a key-value record in the etcd table with revision status encoding
 type KeyValueRecord struct {
 	Key       string
-	Value     *string // nullable for tombstones
-	Revision  int64
-	Timestamp string
+	Value     string // nullable for tombstones
+	Revision  int64  // -1 = pending (needs sync to etcd), >0 = synced from etcd
+	Ts        time.Time
 	Tombstone bool
 }
 
-// WALEntry represents an entry in the etcd_wal table
-type WALEntry struct {
-	Key       string
-	Value     *string // nullable for deletes
-	Revision  *int64  // nullable for new keys
-	Timestamp string
-}
-
-// InsertWALEntry adds a new entry to the etcd_wal table
-func InsertWALEntry(ctx context.Context, pool PgxIface, key string, value *string, revision *int64) error {
-	query := `
-		INSERT INTO etcd_wal (key, value, revision)
-		VALUES ($1, $2, $3)
-	`
-
-	_, err := pool.Exec(ctx, query, key, value, revision)
-	if err != nil {
-		return fmt.Errorf("failed to insert WAL entry: %w", err)
-	}
-
-	return nil
-}
-
-// GetPendingWALEntries retrieves WAL entries that need to be processed
-func GetPendingWALEntries(ctx context.Context, pool PgxIface) ([]WALEntry, error) {
-	query := `
-		SELECT key, value, revision, ts
-		FROM etcd_wal
-		ORDER BY ts ASC
-	`
+// GetPendingRecords retrieves records that need to be synced to etcd (revision = -1)
+func GetPendingRecords(ctx context.Context, pool PgxIface) ([]KeyValueRecord, error) {
+	query := `SELECT key, value, revision, ts, tombstone
+		FROM etcd 
+		WHERE revision = -1
+		ORDER BY ts ASC`
 
 	rows, err := pool.Query(ctx, query)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query WAL entries: %w", err)
+		return nil, fmt.Errorf("failed to query pending records: %w", err)
 	}
 	defer rows.Close()
 
-	var entries []WALEntry
-	for rows.Next() {
-		var entry WALEntry
-		var value pgtype.Text
-		var revision pgtype.Int8
-
-		err := rows.Scan(&entry.Key, &value, &revision, &entry.Timestamp)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan WAL entry: %w", err)
-		}
-
-		if value.Valid {
-			entry.Value = &value.String
-		}
-		if revision.Valid {
-			entry.Revision = &revision.Int64
-		}
-
-		entries = append(entries, entry)
+	records, err := pgx.CollectRows(rows, pgx.RowToStructByNameLax[KeyValueRecord]) // ensure rows are closed in case of early return
+	if err != nil {
+		return nil, fmt.Errorf("error iterating pending records: %w", err)
 	}
 
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating WAL entries: %w", err)
-	}
-
-	return entries, nil
+	return records, nil
 }
 
-// UpdateWALEntry removes a processed WAL entry
-func UpdateWALEntry(ctx context.Context, pool PgxIface, key string, timestamp string, revision int64) error {
-	query := `UPDATE etcd_wal SET revision = $3 WHERE key = $1 AND ts = $2`
+// UpdateRevision updates the revision of a record after successful sync to etcd
+func UpdateRevision(ctx context.Context, pool PgxIface, key string, revision int64) error {
+	query := `UPDATE etcd SET revision = $2 WHERE key = $1 AND revision = -1`
 
-	_, err := pool.Exec(ctx, query, key, timestamp, revision)
+	result, err := pool.Exec(ctx, query, key, revision)
 	if err != nil {
-		return fmt.Errorf("failed to delete WAL entry: %w", err)
+		return fmt.Errorf("failed to update revision: %w", err)
+	}
+
+	rowsAffected := result.RowsAffected()
+	if rowsAffected == 0 {
+		return fmt.Errorf("no pending record found for key %s", key)
 	}
 
 	return nil
-} // GetLatestRevision returns the highest revision number in the etcd table
+}
+
+// InsertPendingRecord inserts a new record with revision -1 (pending sync to etcd)
+func InsertPendingRecord(ctx context.Context, pool PgxIface, key string, value string, tombstone bool) error {
+	query := `
+		INSERT INTO etcd (key, value, revision, tombstone)
+		VALUES ($1, $2, -1, $3) 
+		ON CONFLICT (key, revision) DO UPDATE 
+		SET value = EXCLUDED.value, ts = CURRENT_TIMESTAMP, tombstone = EXCLUDED.tombstone;
+	`
+
+	_, err := pool.Exec(ctx, query, key, value, tombstone)
+	if err != nil {
+		return fmt.Errorf("failed to insert pending record: %w", err)
+	}
+
+	return nil
+}
+
+// GetLatestRevision returns the highest revision number in the etcd table
 func GetLatestRevision(ctx context.Context, pool PgxIface) (int64, error) {
 	var revision sql.NullInt64
 
