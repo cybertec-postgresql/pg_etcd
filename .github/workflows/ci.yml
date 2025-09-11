@@ -42,7 +42,7 @@ jobs:
       # Note: Integration tests run via testcontainers (no separate services needed)
 
     - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v3
+      uses: codecov/codecov-action@v5
       with:
         file: ./coverage.out
         flags: unittests
