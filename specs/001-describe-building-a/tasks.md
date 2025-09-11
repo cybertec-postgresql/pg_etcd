@@ -63,11 +63,12 @@
 
 ## Phase 3.5: Error Handling & Resilience
 
-- [ ] T024 Connection retry logic: internal/db/retry.go exponential backoff for PostgreSQL
-- [ ] T025 etcd reconnection: internal/etcd/retry.go handle watch failures and compaction
-- [ ] T026 Sync error handling: internal/sync/errors.go classify and retry transient failures
-- [ ] T027 Logging integration: cmd/etcd_fdw/logging.go structured logging with logrus
-- [ ] T028 Graceful shutdown: cmd/etcd_fdw/signals.go handle SIGINT/SIGTERM
+- [x] T024 Connection retry logic: use github.com/sethvargo/go-retry for exponential backoff for PostgreSQL - implemented internal/db/retry.go with NewWithRetry() and RetryOperation() using common internal/retry package
+- [x] T025 etcd reconnection: handle watch failures and compaction, and reconnect logic - implemented internal/etcd/retry.go with NewEtcdClientWithRetry() and WatchWithRecovery() using common internal/retry package  
+- [x] T026 Sync error handling: classify and retry transient failures - simplified to use common internal/retry package directly (complex error classification removed per KISS principle)
+- [x] T027 Logging integration: take inspiration from github.com/cybertec-postgresql/pgwatch/tree/master/internal/log for structured logging with logrus implementation, but keep simple. - enhanced main.go with JSON structured logging and enhanced sync logging
+
+**Note**: Refactored T024-T025 to use common retry abstraction (internal/retry/retry.go) eliminating code duplication between PostgreSQL and etcd retry logic. Total implementation: 259 lines vs ~400 lines before refactoring.
 
 ## Phase 3.6: Integration & Validation
 

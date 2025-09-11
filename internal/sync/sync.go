@@ -13,6 +13,7 @@ import (
 
 	"github.com/cybertec-postgresql/etcd_fdw/internal/db"
 	"github.com/cybertec-postgresql/etcd_fdw/internal/etcd"
+	"github.com/cybertec-postgresql/etcd_fdw/internal/retry"
 )
 
 const InvalidRevision = -1
@@ -118,31 +119,38 @@ func (s *Service) syncEtcdToPostgreSQL(ctx context.Context) error {
 		return fmt.Errorf("failed to get latest revision: %w", err)
 	}
 
-	// Start watching from the next revision
-	watchChan := s.etcdClient.WatchPrefix(ctx, s.prefix, latestRevision)
+	// Start watching from the next revision with automatic recovery
+	watchChan := s.etcdClient.WatchWithRecovery(ctx, s.prefix, latestRevision)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case watchResp := <-watchChan:
+		case watchResp, ok := <-watchChan:
+			if !ok {
+				// Watch channel closed, likely due to context cancellation
+				return ctx.Err()
+			}
+
 			if watchResp.Canceled {
-				logrus.Warn("etcd watch was canceled, attempting to restart")
-				// In a production system, we would implement exponential backoff here
-				time.Sleep(time.Second)
-				watchChan = s.etcdClient.WatchPrefix(ctx, s.prefix, latestRevision)
+				// This should be handled by WatchWithRecovery, but log it
+				logrus.Warn("etcd watch was canceled - recovery should be automatic")
 				continue
 			}
 
 			if err := watchResp.Err(); err != nil {
-				logrus.WithError(err).Error("etcd watch error")
-				return fmt.Errorf("etcd watch error: %w", err)
+				logrus.WithError(err).Error("etcd watch error - recovery should be automatic")
+				continue
 			}
 
 			// Process all events in this watch response
 			for _, event := range watchResp.Events {
-				if err := s.processEtcdEvent(ctx, event); err != nil {
-					logrus.WithError(err).WithField("key", string(event.Kv.Key)).Error("Failed to process etcd event")
+				err := retry.WithOperation(ctx, retry.EtcdDefaults(), func() error {
+					return s.processEtcdEvent(ctx, event)
+				}, "process_etcd_event")
+
+				if err != nil {
+					logrus.WithError(err).WithField("key", string(event.Kv.Key)).Error("Failed to process etcd event after retries")
 					// Continue processing other events rather than failing entirely
 				} else {
 					latestRevision = event.Kv.ModRevision
@@ -227,8 +235,10 @@ func (s *Service) syncPostgreSQLToEtcd(ctx context.Context) error {
 				continue
 			}
 
-			if err := s.processPostgreSQLNotification(ctx, notification); err != nil {
-				logrus.WithError(err).WithField("payload", notification.Payload).Error("Failed to process PostgreSQL notification")
+			if err := retry.WithOperation(ctx, retry.PostgreSQLDefaults(), func() error {
+				return s.processPostgreSQLNotification(ctx, notification)
+			}, "process_pg_notification"); err != nil {
+				logrus.WithError(err).WithField("payload", notification.Payload).Error("Failed to process PostgreSQL notification after retries")
 				// Continue processing other notifications rather than failing entirely
 			}
 		}
@@ -274,32 +284,56 @@ func (s *Service) processPostgreSQLNotification(ctx context.Context, notificatio
 		return db.UpdateWALEntry(ctx, s.pgPool, walNotification.Key, walNotification.Ts, InvalidRevision)
 	}
 
-	// Apply the change to etcd
+	// Apply the change to etcd with retry logic
 	var newRevision int64
 	switch walNotification.Operation {
 	case "CREATE", "UPDATE":
 		if walNotification.Value != nil {
-			resp, err := s.etcdClient.Put(ctx, walNotification.Key, *walNotification.Value)
+			err := etcd.RetryEtcdOperation(ctx, func() error {
+				resp, putErr := s.etcdClient.Put(ctx, walNotification.Key, *walNotification.Value)
+				if putErr != nil {
+					return putErr
+				}
+				newRevision = resp.Header.Revision
+				return nil
+			}, "etcd_put")
+
 			if err != nil {
-				// Mark WAL entry as failed
-				db.UpdateWALEntry(ctx, s.pgPool, walNotification.Key, walNotification.Ts, InvalidRevision)
+				logrus.WithError(err).WithFields(logrus.Fields{
+					"key":       walNotification.Key,
+					"timestamp": walNotification.Ts,
+					"operation": "etcd_put",
+				}).Error("Failed to sync to etcd after retries")
 				return fmt.Errorf("failed to put key to etcd: %w", err)
 			}
-			newRevision = resp.Header.Revision
 			logrus.WithField("key", walNotification.Key).Info("Synced PostgreSQL change to etcd (PUT)")
 		}
 	case "DELETE":
-		resp, err := s.etcdClient.Delete(ctx, walNotification.Key)
+		err := etcd.RetryEtcdOperation(ctx, func() error {
+			resp, delErr := s.etcdClient.Delete(ctx, walNotification.Key)
+			if delErr != nil {
+				return delErr
+			}
+			newRevision = resp.Header.Revision
+			return nil
+		}, "etcd_delete")
+
 		if err != nil {
-			// Mark WAL entry as failed
-			db.UpdateWALEntry(ctx, s.pgPool, walNotification.Key, walNotification.Ts, InvalidRevision)
+			logrus.WithError(err).WithFields(logrus.Fields{
+				"key":       walNotification.Key,
+				"timestamp": walNotification.Ts,
+				"operation": "etcd_delete",
+			}).Error("Failed to sync to etcd after retries")
 			return fmt.Errorf("failed to delete key from etcd: %w", err)
 		}
-		newRevision = resp.Header.Revision
 		logrus.WithField("key", walNotification.Key).Info("Synced PostgreSQL change to etcd (DELETE)")
 	default:
-		// Mark WAL entry as failed due to unknown operation
-		db.UpdateWALEntry(ctx, s.pgPool, walNotification.Key, walNotification.Ts, InvalidRevision)
+		// Log unknown operation type
+		logrus.WithFields(logrus.Fields{
+			"key":       walNotification.Key,
+			"timestamp": walNotification.Ts,
+			"operation": walNotification.Operation,
+		}).Error("Unknown operation type")
 		return fmt.Errorf("unknown operation type: %s", walNotification.Operation)
 	}
 

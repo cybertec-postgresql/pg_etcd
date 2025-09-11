@@ -96,14 +96,36 @@ func ShowVersion() {
 	}
 }
 
-// SetupLogging configures the logging system based on the log level
+// SetupLogging configures the logging system with structured output
 func SetupLogging(logLevel string) error {
-	logrus.SetFormatter(&logrus.JSONFormatter{})
+	// Parse log level
 	level, err := logrus.ParseLevel(logLevel)
 	if err != nil {
 		return fmt.Errorf("invalid log level: %w", err)
 	}
 	logrus.SetLevel(level)
+
+	// Configure formatter with consistent structure
+	logrus.SetFormatter(&logrus.JSONFormatter{
+		TimestampFormat:   "2006-01-02T15:04:05.000Z07:00",
+		DisableHTMLEscape: true,
+		FieldMap: logrus.FieldMap{
+			logrus.FieldKeyTime:  "timestamp",
+			logrus.FieldKeyLevel: "level",
+			logrus.FieldKeyMsg:   "message",
+		},
+	})
+
+	// Add common fields to all log entries
+	logrus.SetReportCaller(false) // Keep simple, don't include caller info
+
+	// Add process info to context
+	logrus.WithFields(logrus.Fields{
+		"version": version,
+		"commit":  commit,
+		"pid":     os.Getpid(),
+	}).Info("etcd_fdw logging initialized")
+
 	return nil
 }
 
@@ -144,20 +166,20 @@ func main() {
 		cancel()
 	}()
 
-	// Connect to PostgreSQL
+	// Connect to PostgreSQL with retry logic
 	var pgPool db.PgxPoolIface
-	if pgPool, err = db.New(ctx, config.PostgresDSN); err != nil {
-		logrus.WithError(err).Fatal("Failed to connect to PostgreSQL")
+	if pgPool, err = db.NewWithRetry(ctx, config.PostgresDSN); err != nil {
+		logrus.WithError(err).Fatal("Failed to connect to PostgreSQL after retries")
 	}
 	defer pgPool.Close()
 
-	// Connect to etcd
+	// Connect to etcd with retry logic
 	var etcdClient *etcd.EtcdClient
 	if config.EtcdDSN != "" {
 		var err error
-		etcdClient, err = etcd.NewEtcdClient(config.EtcdDSN)
+		etcdClient, err = etcd.NewEtcdClientWithRetry(ctx, config.EtcdDSN)
 		if err != nil {
-			logrus.WithError(err).Fatal("Failed to connect to etcd")
+			logrus.WithError(err).Fatal("Failed to connect to etcd after retries")
 		}
 		defer etcdClient.Close()
 	}
