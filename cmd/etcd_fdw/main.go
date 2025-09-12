@@ -90,6 +90,19 @@ func SetupLogging(logLevel string) error {
 	return nil
 }
 
+// SetupCloseHandler creates a 'listener' on a new goroutine which will notify the
+// program if it receives an interrupt from the OS. We then handle this by calling
+// our clean up procedure and exiting the program.
+func SetupCloseHandler(cancel context.CancelFunc) {
+	c := make(chan os.Signal, 2)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-c
+		logrus.Debug("SetupCloseHandler received an interrupt from OS. Closing session...")
+		cancel()
+	}()
+}
+
 func main() {
 	// Quick check for version flags before full parsing
 	for _, arg := range os.Args[1:] {
@@ -117,16 +130,7 @@ func main() {
 	// Setup graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
-	// Setup signal handling for graceful shutdown
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-	go func() {
-		sig := <-sigChan
-		logrus.WithField("signal", sig).Info("Received shutdown signal, initiating graceful shutdown...")
-		cancel()
-	}()
+	SetupCloseHandler(cancel)
 
 	// Connect to PostgreSQL with retry logic
 	pgPool, err := sync.NewWithRetry(ctx, config.PostgresDSN)
@@ -136,18 +140,11 @@ func main() {
 	defer pgPool.Close()
 
 	// Connect to etcd with retry logic
-	var etcdClient *sync.EtcdClient
-	if config.EtcdDSN != "" {
-		var err error
-		etcdClient, err = sync.NewEtcdClientWithRetry(ctx, config.EtcdDSN)
-		if err != nil {
-			logrus.WithError(err).Fatal("Failed to connect to etcd after retries")
-		}
-		defer etcdClient.Close()
+	etcdClient, err := sync.NewEtcdClientWithRetry(ctx, config.EtcdDSN)
+	if err != nil {
+		logrus.WithError(err).Fatal("Failed to connect to etcd after retries")
 	}
-
-	// Get prefix from etcd DSN
-	prefix := sync.GetPrefix(config.EtcdDSN)
+	defer etcdClient.Close()
 
 	// Parse polling interval
 	pollingInterval, err := time.ParseDuration(config.PollingInterval)
@@ -156,7 +153,7 @@ func main() {
 	}
 
 	// Create and start sync service
-	syncService := sync.NewService(pgPool, etcdClient, prefix, pollingInterval)
+	syncService := sync.NewService(pgPool, etcdClient, pollingInterval)
 	if err := syncService.Start(ctx); err != nil && ctx.Err() == nil {
 		logrus.WithError(err).Fatal("Synchronization failed")
 	}

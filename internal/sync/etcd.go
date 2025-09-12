@@ -16,6 +16,7 @@ import (
 // EtcdClient handles all etcd operations for PostgreSQL synchronization
 type EtcdClient struct {
 	*clientv3.Client
+	prefix string
 }
 
 // NewEtcdClient creates a new etcd client with DSN parsing
@@ -34,6 +35,7 @@ func NewEtcdClient(dsn string) (*EtcdClient, error) {
 
 	return &EtcdClient{
 		Client: client,
+		prefix: getPrefix(dsn),
 	}, nil
 }
 
@@ -46,15 +48,15 @@ func (c *EtcdClient) Close() error {
 }
 
 // WatchPrefix sets up a watch for all keys with the given prefix
-func (c *EtcdClient) WatchPrefix(ctx context.Context, prefix string, startRevision int64) clientv3.WatchChan {
+func (c *EtcdClient) WatchPrefix(ctx context.Context, startRevision int64) clientv3.WatchChan {
 	opts := []clientv3.OpOption{clientv3.WithPrefix()}
 	if startRevision > 0 {
 		opts = append(opts, clientv3.WithRev(startRevision+1))
 	}
 
-	watchChan := c.Client.Watch(ctx, prefix, opts...)
+	watchChan := c.Client.Watch(ctx, c.prefix, opts...)
 	logrus.WithFields(logrus.Fields{
-		"prefix":   prefix,
+		"prefix":   c.prefix,
 		"revision": startRevision,
 	}).Info("Started etcd watch")
 
@@ -173,7 +175,7 @@ func NewEtcdClientWithRetry(ctx context.Context, dsn string) (*EtcdClient, error
 }
 
 // WatchWithRecovery wraps the etcd watch functionality with automatic recovery
-func (c *EtcdClient) WatchWithRecovery(ctx context.Context, prefix string, startRevision int64) <-chan clientv3.WatchResponse {
+func (c *EtcdClient) WatchWithRecovery(ctx context.Context, startRevision int64) <-chan clientv3.WatchResponse {
 	watchChan := make(chan clientv3.WatchResponse)
 
 	go func() {
@@ -187,7 +189,7 @@ func (c *EtcdClient) WatchWithRecovery(ctx context.Context, prefix string, start
 				return
 			default:
 				// Attempt to establish watch
-				innerWatchChan := c.WatchPrefix(ctx, prefix, currentRevision)
+				innerWatchChan := c.WatchPrefix(ctx, currentRevision)
 
 				for {
 					select {
@@ -249,7 +251,7 @@ func RetryEtcdOperation(ctx context.Context, operation func() error, operationNa
 // parseEtcdDSN parses etcd DSN format: etcd://[user:password@]host1:port1[,host2:port2]/[prefix]?param=value
 func parseEtcdDSN(dsn string) (*clientv3.Config, error) {
 	if dsn == "" {
-		return nil, fmt.Errorf("etcd DSN is required")
+		return &clientv3.Config{}, nil // Default config
 	}
 
 	// Parse the DSN if provided
@@ -321,8 +323,8 @@ func parseEtcdDSN(dsn string) (*clientv3.Config, error) {
 	return config, nil
 }
 
-// GetPrefix extracts the prefix from the etcd DSN path
-func GetPrefix(dsn string) string {
+// getPrefix extracts the prefix from the etcd DSN path
+func getPrefix(dsn string) string {
 	if dsn == "" || !strings.HasPrefix(dsn, "etcd://") {
 		return "/"
 	}

@@ -21,11 +21,10 @@ type Service struct {
 }
 
 // NewService creates a new synchronization service
-func NewService(pgPool PgxIface, etcdClient *EtcdClient, prefix string, pollingInterval time.Duration) *Service {
+func NewService(pgPool PgxIface, etcdClient *EtcdClient, pollingInterval time.Duration) *Service {
 	return &Service{
 		pgPool:          pgPool,
 		etcdClient:      etcdClient,
-		prefix:          prefix,
 		pollingInterval: pollingInterval,
 	}
 }
@@ -109,7 +108,7 @@ func (s *Service) syncEtcdToPostgreSQL(ctx context.Context) error {
 	}
 
 	// Start watching from the next revision with automatic recovery
-	watchChan := s.etcdClient.WatchWithRecovery(ctx, s.prefix, latestRevision)
+	watchChan := s.etcdClient.WatchWithRecovery(ctx, latestRevision)
 
 	for {
 		select {
