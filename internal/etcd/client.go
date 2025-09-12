@@ -15,8 +15,8 @@ import (
 
 // EtcdClient handles all etcd operations for PostgreSQL synchronization
 type EtcdClient struct {
-	client *clientv3.Client
-	dsn    string
+	*clientv3.Client
+	dsn string
 }
 
 // NewEtcdClient creates a new etcd client with DSN parsing
@@ -34,22 +34,17 @@ func NewEtcdClient(dsn string) (*EtcdClient, error) {
 	logrus.WithField("endpoints", config.Endpoints).Info("Connected to etcd successfully")
 
 	return &EtcdClient{
-		client: client,
+		Client: client,
 		dsn:    dsn,
 	}, nil
 }
 
 // Close closes the etcd client connection
 func (c *EtcdClient) Close() error {
-	if c.client != nil {
-		return c.client.Close()
+	if c.Client != nil {
+		return c.Client.Close()
 	}
 	return nil
-}
-
-// Client returns the underlying etcd client for direct access
-func (c *EtcdClient) Client() *clientv3.Client {
-	return c.client
 }
 
 // WatchPrefix sets up a watch for all keys with the given prefix
@@ -59,7 +54,7 @@ func (c *EtcdClient) WatchPrefix(ctx context.Context, prefix string, startRevisi
 		opts = append(opts, clientv3.WithRev(startRevision+1))
 	}
 
-	watchChan := c.client.Watch(ctx, prefix, opts...)
+	watchChan := c.Client.Watch(ctx, prefix, opts...)
 	logrus.WithFields(logrus.Fields{
 		"prefix":   prefix,
 		"revision": startRevision,
@@ -70,7 +65,7 @@ func (c *EtcdClient) WatchPrefix(ctx context.Context, prefix string, startRevisi
 
 // GetAllKeys retrieves all key-value pairs with the given prefix for initial sync
 func (c *EtcdClient) GetAllKeys(ctx context.Context, prefix string) ([]KeyValuePair, error) {
-	resp, err := c.client.Get(ctx, prefix, clientv3.WithPrefix(), clientv3.WithSort(clientv3.SortByKey, clientv3.SortAscend))
+	resp, err := c.Client.Get(ctx, prefix, clientv3.WithPrefix(), clientv3.WithSort(clientv3.SortByKey, clientv3.SortAscend))
 	if err != nil {
 		return nil, fmt.Errorf("failed to get all keys: %w", err)
 	}
@@ -97,7 +92,7 @@ func (c *EtcdClient) GetAllKeys(ctx context.Context, prefix string) ([]KeyValueP
 
 // Put stores a key-value pair in etcd
 func (c *EtcdClient) Put(ctx context.Context, key, value string) (*clientv3.PutResponse, error) {
-	resp, err := c.client.Put(ctx, key, value)
+	resp, err := c.Client.Put(ctx, key, value)
 	if err != nil {
 		return nil, fmt.Errorf("failed to put key %s: %w", key, err)
 	}
@@ -112,7 +107,7 @@ func (c *EtcdClient) Put(ctx context.Context, key, value string) (*clientv3.PutR
 
 // Delete removes a key from etcd
 func (c *EtcdClient) Delete(ctx context.Context, key string) (*clientv3.DeleteResponse, error) {
-	resp, err := c.client.Delete(ctx, key)
+	resp, err := c.Client.Delete(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("failed to delete key %s: %w", key, err)
 	}
@@ -128,7 +123,7 @@ func (c *EtcdClient) Delete(ctx context.Context, key string) (*clientv3.DeleteRe
 
 // Get retrieves a single key from etcd
 func (c *EtcdClient) Get(ctx context.Context, key string) (*KeyValuePair, error) {
-	resp, err := c.client.Get(ctx, key)
+	resp, err := c.Client.Get(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get key %s: %w", key, err)
 	}
