@@ -210,15 +210,10 @@ func InsertPendingRecord(ctx context.Context, pool PgxIface, key string, value s
 		ON CONFLICT (key, revision) DO UPDATE 
 		SET value = EXCLUDED.value, ts = CURRENT_TIMESTAMP, tombstone = EXCLUDED.tombstone;
 	`
-
-	var valueParam any
 	if tombstone {
-		valueParam = nil // Insert NULL for tombstones
-	} else {
-		valueParam = value
+		value = "" // Use empty string for tombstone records
 	}
-
-	_, err := pool.Exec(ctx, query, key, valueParam, tombstone)
+	_, err := pool.Exec(ctx, query, key, value, tombstone)
 	if err != nil {
 		return fmt.Errorf("failed to insert pending record: %w", err)
 	}

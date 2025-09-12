@@ -11,7 +11,7 @@ import (
 )
 
 // TestBulkInsert tests bulk insert operation with pgxmock (simplified)
-func TestBulkInsert(t *testing.T) {
+func TestBulkInsertMock(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
 	defer mock.Close()
@@ -106,7 +106,7 @@ func TestUpdateRevisionNotFound(t *testing.T) {
 }
 
 // TestGetLatestRevision tests getting latest revision with pgxmock
-func TestGetLatestRevision(t *testing.T) {
+func TestGetLatestRevisionMock(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
 	defer mock.Close()
@@ -149,7 +149,7 @@ func TestGetLatestRevisionEmpty(t *testing.T) {
 }
 
 // TestInsertPendingRecord tests inserting pending record with pgxmock
-func TestInsertPendingRecord(t *testing.T) {
+func TestInsertPendingRecordMock(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
 	defer mock.Close()
@@ -176,9 +176,9 @@ func TestInsertPendingRecordTombstone(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Test tombstone record insert (value should be nil)
+	// Test tombstone record insert (value should be empty string)
 	mock.ExpectExec(`INSERT INTO etcd \(key, value, revision, tombstone\)`).
-		WithArgs("test-key", nil, true).
+		WithArgs("test-key", "", true).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	err = InsertPendingRecord(ctx, mock, "test-key", "test-value", true)

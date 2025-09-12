@@ -1,10 +1,21 @@
-name: CI
+name: Build and Test
+
+permissions:
+  contents: write
+  packages: write
+  pages: write
 
 on:
   push:
-    branches: [ main, 'feature/*' ]
+    branches:
+      - master
   pull_request:
-    branches: [ main ]
+    paths-ignore: ['docs/**', '*.md']
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
