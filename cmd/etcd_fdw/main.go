@@ -13,8 +13,6 @@ import (
 	"github.com/jessevdk/go-flags"
 	"github.com/sirupsen/logrus"
 
-	"github.com/cybertec-postgresql/etcd_fdw/internal/db"
-	"github.com/cybertec-postgresql/etcd_fdw/internal/etcd"
 	"github.com/cybertec-postgresql/etcd_fdw/internal/log"
 	"github.com/cybertec-postgresql/etcd_fdw/internal/sync"
 )
@@ -131,17 +129,17 @@ func main() {
 	}()
 
 	// Connect to PostgreSQL with retry logic
-	var pgPool db.PgxPoolIface
-	if pgPool, err = db.NewWithRetry(ctx, config.PostgresDSN); err != nil {
+	pgPool, err := sync.NewWithRetry(ctx, config.PostgresDSN)
+	if err != nil {
 		logrus.WithError(err).Fatal("Failed to connect to PostgreSQL after retries")
 	}
 	defer pgPool.Close()
 
 	// Connect to etcd with retry logic
-	var etcdClient *etcd.EtcdClient
+	var etcdClient *sync.EtcdClient
 	if config.EtcdDSN != "" {
 		var err error
-		etcdClient, err = etcd.NewEtcdClientWithRetry(ctx, config.EtcdDSN)
+		etcdClient, err = sync.NewEtcdClientWithRetry(ctx, config.EtcdDSN)
 		if err != nil {
 			logrus.WithError(err).Fatal("Failed to connect to etcd after retries")
 		}
@@ -149,7 +147,7 @@ func main() {
 	}
 
 	// Get prefix from etcd DSN
-	prefix := etcd.GetPrefix(config.EtcdDSN)
+	prefix := sync.GetPrefix(config.EtcdDSN)
 
 	// Parse polling interval
 	pollingInterval, err := time.ParseDuration(config.PollingInterval)

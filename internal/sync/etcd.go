@@ -1,5 +1,5 @@
-// Package etcd provides etcd client operations for PostgreSQL synchronization.
-package etcd
+// Package sync provides consolidated etcd client operations for PostgreSQL synchronization.
+package sync
 
 import (
 	"context"
@@ -15,8 +15,7 @@ import (
 
 // EtcdClient handles all etcd operations for PostgreSQL synchronization
 type EtcdClient struct {
-	client *clientv3.Client
-	dsn    string
+	*clientv3.Client
 }
 
 // NewEtcdClient creates a new etcd client with DSN parsing
@@ -34,22 +33,16 @@ func NewEtcdClient(dsn string) (*EtcdClient, error) {
 	logrus.WithField("endpoints", config.Endpoints).Info("Connected to etcd successfully")
 
 	return &EtcdClient{
-		client: client,
-		dsn:    dsn,
+		Client: client,
 	}, nil
 }
 
 // Close closes the etcd client connection
 func (c *EtcdClient) Close() error {
-	if c.client != nil {
-		return c.client.Close()
+	if c.Client != nil {
+		return c.Client.Close()
 	}
 	return nil
-}
-
-// Client returns the underlying etcd client for direct access
-func (c *EtcdClient) Client() *clientv3.Client {
-	return c.client
 }
 
 // WatchPrefix sets up a watch for all keys with the given prefix
@@ -59,7 +52,7 @@ func (c *EtcdClient) WatchPrefix(ctx context.Context, prefix string, startRevisi
 		opts = append(opts, clientv3.WithRev(startRevision+1))
 	}
 
-	watchChan := c.client.Watch(ctx, prefix, opts...)
+	watchChan := c.Client.Watch(ctx, prefix, opts...)
 	logrus.WithFields(logrus.Fields{
 		"prefix":   prefix,
 		"revision": startRevision,
@@ -69,16 +62,16 @@ func (c *EtcdClient) WatchPrefix(ctx context.Context, prefix string, startRevisi
 }
 
 // GetAllKeys retrieves all key-value pairs with the given prefix for initial sync
-func (c *EtcdClient) GetAllKeys(ctx context.Context, prefix string) ([]KeyValuePair, error) {
-	resp, err := c.client.Get(ctx, prefix, clientv3.WithPrefix(), clientv3.WithSort(clientv3.SortByKey, clientv3.SortAscend))
+func (c *EtcdClient) GetAllKeys(ctx context.Context, prefix string) ([]KeyValueRecord, error) {
+	resp, err := c.Client.Get(ctx, prefix, clientv3.WithPrefix(), clientv3.WithSort(clientv3.SortByKey, clientv3.SortAscend))
 	if err != nil {
 		return nil, fmt.Errorf("failed to get all keys: %w", err)
 	}
 
-	pairs := make([]KeyValuePair, len(resp.Kvs))
+	pairs := make([]KeyValueRecord, len(resp.Kvs))
 	for i, kv := range resp.Kvs {
 		value := string(kv.Value)
-		pairs[i] = KeyValuePair{
+		pairs[i] = KeyValueRecord{
 			Key:       string(kv.Key),
 			Value:     value,
 			Revision:  kv.ModRevision,
@@ -97,7 +90,7 @@ func (c *EtcdClient) GetAllKeys(ctx context.Context, prefix string) ([]KeyValueP
 
 // Put stores a key-value pair in etcd
 func (c *EtcdClient) Put(ctx context.Context, key, value string) (*clientv3.PutResponse, error) {
-	resp, err := c.client.Put(ctx, key, value)
+	resp, err := c.Client.Put(ctx, key, value)
 	if err != nil {
 		return nil, fmt.Errorf("failed to put key %s: %w", key, err)
 	}
@@ -112,7 +105,7 @@ func (c *EtcdClient) Put(ctx context.Context, key, value string) (*clientv3.PutR
 
 // Delete removes a key from etcd
 func (c *EtcdClient) Delete(ctx context.Context, key string) (*clientv3.DeleteResponse, error) {
-	resp, err := c.client.Delete(ctx, key)
+	resp, err := c.Client.Delete(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("failed to delete key %s: %w", key, err)
 	}
@@ -127,8 +120,8 @@ func (c *EtcdClient) Delete(ctx context.Context, key string) (*clientv3.DeleteRe
 }
 
 // Get retrieves a single key from etcd
-func (c *EtcdClient) Get(ctx context.Context, key string) (*KeyValuePair, error) {
-	resp, err := c.client.Get(ctx, key)
+func (c *EtcdClient) Get(ctx context.Context, key string) (*KeyValueRecord, error) {
+	resp, err := c.Client.Get(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get key %s: %w", key, err)
 	}
@@ -140,7 +133,7 @@ func (c *EtcdClient) Get(ctx context.Context, key string) (*KeyValuePair, error)
 	kv := resp.Kvs[0]
 	value := string(kv.Value)
 
-	return &KeyValuePair{
+	return &KeyValueRecord{
 		Key:       string(kv.Key),
 		Value:     value,
 		Revision:  kv.ModRevision,
@@ -148,22 +141,115 @@ func (c *EtcdClient) Get(ctx context.Context, key string) (*KeyValuePair, error)
 	}, nil
 }
 
-// KeyValuePair represents a key-value pair from etcd
-type KeyValuePair struct {
-	Key       string
-	Value     string // nullable for tombstones
-	Revision  int64
-	Tombstone bool
+// NewEtcdClientWithRetry creates a new etcd client with retry logic
+func NewEtcdClientWithRetry(ctx context.Context, dsn string) (*EtcdClient, error) {
+	config := DefaultRetryConfig()
+
+	var client *EtcdClient
+	err := RetryWithBackoff(ctx, config, func() error {
+		var attemptErr error
+		client, attemptErr = NewEtcdClient(dsn)
+		if attemptErr != nil {
+			return attemptErr
+		}
+
+		// Test the connection
+		if _, testErr := client.Get(ctx, "healthcheck"); testErr != nil {
+			if client != nil {
+				client.Close()
+			}
+			return testErr
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		logrus.WithError(err).Error("Failed to establish etcd connection after all retries")
+		return nil, err
+	}
+
+	return client, nil
 }
 
-// parseEtcdDSN parses etcd DSN format: etcd://host1:port1[,host2:port2]/[prefix]?param=value
+// WatchWithRecovery wraps the etcd watch functionality with automatic recovery
+func (c *EtcdClient) WatchWithRecovery(ctx context.Context, prefix string, startRevision int64) <-chan clientv3.WatchResponse {
+	watchChan := make(chan clientv3.WatchResponse)
+
+	go func() {
+		defer close(watchChan)
+
+		currentRevision := startRevision
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				// Attempt to establish watch
+				innerWatchChan := c.WatchPrefix(ctx, prefix, currentRevision)
+
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case watchResp, ok := <-innerWatchChan:
+						if !ok {
+							// Channel closed, need to restart
+							logrus.Warn("etcd watch channel closed, attempting to restart")
+							break
+						}
+
+						if watchResp.Canceled {
+							logrus.Warn("etcd watch was canceled, attempting to restart")
+							break
+						}
+
+						if err := watchResp.Err(); err != nil {
+							logrus.WithError(err).Error("etcd watch error, attempting to restart")
+							break
+						}
+
+						// Update revision from successful events
+						for _, event := range watchResp.Events {
+							if event.Kv.ModRevision > currentRevision {
+								currentRevision = event.Kv.ModRevision
+							}
+						}
+
+						// Forward the response
+						select {
+						case watchChan <- watchResp:
+						case <-ctx.Done():
+							return
+						}
+
+						continue // Continue with current watch
+					}
+
+					// If we reach here, we need to restart the watch
+					break
+				}
+
+				logrus.WithField("revision", currentRevision).Info("Restarting etcd watch")
+				time.Sleep(time.Second) // Simple delay before restart
+			}
+		}
+	}()
+
+	return watchChan
+}
+
+// RetryEtcdOperation retries an etcd operation with exponential backoff
+func RetryEtcdOperation(ctx context.Context, operation func() error, operationName string) error {
+	config := DefaultRetryConfig()
+	return RetryWithBackoff(ctx, config, operation)
+}
+
+// parseEtcdDSN parses etcd DSN format: etcd://[user:password@]host1:port1[,host2:port2]/[prefix]?param=value
 func parseEtcdDSN(dsn string) (*clientv3.Config, error) {
 	if dsn == "" {
-		// Use default etcd configuration
-		return &clientv3.Config{
-			Endpoints:   []string{"127.0.0.1:2379"},
-			DialTimeout: 5 * time.Second,
-		}, nil
+		return nil, fmt.Errorf("etcd DSN is required")
 	}
 
 	// Parse the DSN if provided
@@ -171,11 +257,8 @@ func parseEtcdDSN(dsn string) (*clientv3.Config, error) {
 		return nil, fmt.Errorf("etcd DSN must start with etcd://")
 	}
 
-	// Remove etcd:// prefix
-	dsn = strings.TrimPrefix(dsn, "etcd://")
-
-	// Parse as URL to handle query parameters
-	u, err := url.Parse("dummy://" + dsn)
+	// Parse as proper URL
+	u, err := url.Parse(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse DSN: %w", err)
 	}
@@ -191,6 +274,18 @@ func parseEtcdDSN(dsn string) (*clientv3.Config, error) {
 	config := &clientv3.Config{
 		Endpoints:   endpoints,
 		DialTimeout: 5 * time.Second,
+	}
+
+	// Extract username and password if provided
+	if u.User != nil {
+		username := u.User.Username()
+		password, _ := u.User.Password()
+		if username != "" {
+			config.Username = username
+		}
+		if password != "" {
+			config.Password = password
+		}
 	}
 
 	// Parse query parameters
