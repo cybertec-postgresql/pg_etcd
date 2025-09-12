@@ -9,8 +9,6 @@ import (
 	"github.com/sirupsen/logrus"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
-	"github.com/cybertec-postgresql/etcd_fdw/internal/db"
-	"github.com/cybertec-postgresql/etcd_fdw/internal/etcd"
 	"github.com/cybertec-postgresql/etcd_fdw/internal/retry"
 )
 
@@ -18,14 +16,14 @@ const InvalidRevision = -1
 
 // Service orchestrates bidirectional synchronization between etcd and PostgreSQL
 type Service struct {
-	pgPool          db.PgxPoolIface
-	etcdClient      *etcd.EtcdClient
+	pgPool          PgxIface
+	etcdClient      *EtcdClient
 	prefix          string
 	pollingInterval time.Duration
 }
 
 // NewService creates a new synchronization service
-func NewService(pgPool db.PgxPoolIface, etcdClient *etcd.EtcdClient, prefix string, pollingInterval time.Duration) *Service {
+func NewService(pgPool PgxIface, etcdClient *EtcdClient, prefix string, pollingInterval time.Duration) *Service {
 	return &Service{
 		pgPool:          pgPool,
 		etcdClient:      etcdClient,
@@ -82,9 +80,9 @@ func (s *Service) initialSync(ctx context.Context) error {
 	}
 
 	// Convert to PostgreSQL records
-	records := make([]db.KeyValueRecord, len(pairs))
+	records := make([]KeyValueRecord, len(pairs))
 	for i, pair := range pairs {
-		records[i] = db.KeyValueRecord{
+		records[i] = KeyValueRecord{
 			Key:       pair.Key,
 			Value:     pair.Value,
 			Revision:  pair.Revision,
@@ -94,7 +92,7 @@ func (s *Service) initialSync(ctx context.Context) error {
 	}
 
 	// Bulk insert using COPY
-	if err := db.BulkInsert(ctx, s.pgPool, records); err != nil {
+	if err := BulkInsert(ctx, s.pgPool, records); err != nil {
 		return fmt.Errorf("failed to bulk insert records: %w", err)
 	}
 
@@ -107,7 +105,7 @@ func (s *Service) syncEtcdToPostgreSQL(ctx context.Context) error {
 	logrus.Info("Starting etcd to PostgreSQL sync watcher")
 
 	// Get the latest revision from PostgreSQL to resume from
-	latestRevision, err := db.GetLatestRevision(ctx, s.pgPool)
+	latestRevision, err := GetLatestRevision(ctx, s.pgPool)
 	if err != nil {
 		return fmt.Errorf("failed to get latest revision: %w", err)
 	}
@@ -158,7 +156,7 @@ func (s *Service) processEtcdEvent(ctx context.Context, event *clientv3.Event) e
 	key := string(event.Kv.Key)
 	revision := event.Kv.ModRevision
 
-	var record db.KeyValueRecord
+	var record KeyValueRecord
 	record.Key = key
 	record.Revision = revision
 	record.Ts = time.Now()
@@ -188,7 +186,7 @@ func (s *Service) processEtcdEvent(ctx context.Context, event *clientv3.Event) e
 	}
 
 	// Insert the record into PostgreSQL
-	if err := db.BulkInsert(ctx, s.pgPool, []db.KeyValueRecord{record}); err != nil {
+	if err := BulkInsert(ctx, s.pgPool, []KeyValueRecord{record}); err != nil {
 		return fmt.Errorf("failed to insert event into PostgreSQL: %w", err)
 	}
 
@@ -222,7 +220,7 @@ func (s *Service) syncPostgreSQLToEtcd(ctx context.Context) error {
 
 func (s *Service) pollAndProcessPendingRecords(ctx context.Context) error {
 	// Get pending records (revision = -1) using SELECT FOR UPDATE SKIP LOCKED
-	pendingRecords, err := db.GetPendingRecords(ctx, s.pgPool)
+	pendingRecords, err := GetPendingRecords(ctx, s.pgPool)
 	if err != nil {
 		return fmt.Errorf("failed to get pending records: %w", err)
 	}
@@ -249,7 +247,7 @@ func (s *Service) pollAndProcessPendingRecords(ctx context.Context) error {
 }
 
 // processPendingRecord processes a single pending record and syncs it to etcd
-func (s *Service) processPendingRecord(ctx context.Context, record db.KeyValueRecord) error {
+func (s *Service) processPendingRecord(ctx context.Context, record KeyValueRecord) error {
 	logrus.WithFields(logrus.Fields{
 		"key":       record.Key,
 		"tombstone": record.Tombstone,
@@ -259,7 +257,7 @@ func (s *Service) processPendingRecord(ctx context.Context, record db.KeyValueRe
 	var newRevision int64
 	if record.Tombstone {
 		// Delete operation
-		err := etcd.RetryEtcdOperation(ctx, func() error {
+		err := RetryEtcdOperation(ctx, func() error {
 			resp, delErr := s.etcdClient.Delete(ctx, record.Key)
 			if delErr != nil {
 				return delErr
@@ -282,7 +280,7 @@ func (s *Service) processPendingRecord(ctx context.Context, record db.KeyValueRe
 		}).Info("Synced PostgreSQL change to etcd (DELETE)")
 	} else {
 		// Put operation
-		err := etcd.RetryEtcdOperation(ctx, func() error {
+		err := RetryEtcdOperation(ctx, func() error {
 			resp, putErr := s.etcdClient.Put(ctx, record.Key, record.Value)
 			if putErr != nil {
 				return putErr
@@ -306,5 +304,5 @@ func (s *Service) processPendingRecord(ctx context.Context, record db.KeyValueRe
 	}
 
 	// Update local record with the new etcd revision
-	return db.UpdateRevision(ctx, s.pgPool, record.Key, newRevision)
+	return UpdateRevision(ctx, s.pgPool, record.Key, newRevision)
 }

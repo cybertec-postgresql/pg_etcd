@@ -14,8 +14,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 
-	"github.com/cybertec-postgresql/etcd_fdw/internal/db"
-	"github.com/cybertec-postgresql/etcd_fdw/internal/etcd"
+	"github.com/cybertec-postgresql/etcd_fdw/internal/sync"
 )
 
 func setupPostgreSQLContainer(ctx context.Context, t *testing.T) (*pgxpool.Pool, testcontainers.Container) {
@@ -54,7 +53,7 @@ func setupPostgreSQLContainer(ctx context.Context, t *testing.T) (*pgxpool.Pool,
 	return pool, pgContainer
 }
 
-func setupEtcdContainer(ctx context.Context, t *testing.T) (*etcd.EtcdClient, testcontainers.Container) {
+func setupEtcdContainer(ctx context.Context, t *testing.T) (*sync.EtcdClient, testcontainers.Container) {
 	etcdContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image:        "quay.io/coreos/etcd:v3.5.9",
@@ -77,13 +76,13 @@ func setupEtcdContainer(ctx context.Context, t *testing.T) (*etcd.EtcdClient, te
 	require.NoError(t, err)
 
 	dsn := "etcd://" + endpoint + "/test"
-	etcdClient, err := etcd.NewEtcdClient(dsn)
+	etcdClient, err := sync.NewEtcdClient(dsn)
 	require.NoError(t, err)
 
 	return etcdClient, etcdContainer
 }
 
-func setupTestContainers(t *testing.T) (*pgxpool.Pool, *etcd.EtcdClient, func()) {
+func setupTestContainers(t *testing.T) (*pgxpool.Pool, *sync.EtcdClient, func()) {
 	ctx := context.Background()
 
 	pool, pgContainer := setupPostgreSQLContainer(ctx, t)
@@ -118,18 +117,18 @@ func TestPollingMechanism(t *testing.T) {
 	require.NoError(t, err)
 
 	// Test GetPendingRecords function
-	pendingRecords, err := db.GetPendingRecords(ctx, pool)
+	pendingRecords, err := sync.GetPendingRecords(ctx, pool)
 	require.NoError(t, err)
 	assert.Len(t, pendingRecords, 1)
 	assert.Equal(t, "test/polling/key1", pendingRecords[0].Key)
 	assert.Equal(t, "value1", pendingRecords[0].Value)
 
 	// Test UpdateRevision function
-	err = db.UpdateRevision(ctx, pool, "test/polling/key1", 123)
+	err = sync.UpdateRevision(ctx, pool, "test/polling/key1", 123)
 	require.NoError(t, err)
 
 	// Verify record was updated
-	pendingAfterUpdate, err := db.GetPendingRecords(ctx, pool)
+	pendingAfterUpdate, err := sync.GetPendingRecords(ctx, pool)
 	require.NoError(t, err)
 	assert.Len(t, pendingAfterUpdate, 0, "No pending records should remain after update")
 
@@ -155,7 +154,7 @@ func TestBulkInsert(t *testing.T) {
 	defer cancel()
 
 	// Prepare test records
-	records := []db.KeyValueRecord{
+	records := []sync.KeyValueRecord{
 		{
 			Key:       "test/bulk/key1",
 			Value:     ("value1"),
@@ -180,7 +179,7 @@ func TestBulkInsert(t *testing.T) {
 	}
 
 	// Test BulkInsert function
-	err := db.BulkInsert(ctx, pool, records)
+	err := sync.BulkInsert(ctx, pool, records)
 	require.NoError(t, err)
 
 	// Verify records were inserted correctly
@@ -228,7 +227,7 @@ func TestInsertPendingRecord(t *testing.T) {
 	defer cancel()
 
 	// Test inserting a new pending record
-	err := db.InsertPendingRecord(ctx, pool, "test/pending/key1", ("value1"), false)
+	err := sync.InsertPendingRecord(ctx, pool, "test/pending/key1", ("value1"), false)
 	require.NoError(t, err)
 
 	// Verify record was inserted with revision = -1
@@ -244,7 +243,7 @@ func TestInsertPendingRecord(t *testing.T) {
 	assert.Equal(t, "value1", value.String)
 
 	// Test inserting second record with same key (should create new record with different timestamp)
-	err = db.InsertPendingRecord(ctx, pool, "test/pending/key1", ("updated_value"), false)
+	err = sync.InsertPendingRecord(ctx, pool, "test/pending/key1", ("updated_value"), false)
 	require.NoError(t, err)
 
 	// Verify both records exist (different timestamps, both with revision = -1)
@@ -257,7 +256,7 @@ func TestInsertPendingRecord(t *testing.T) {
 	assert.Equal(t, 1, count, "Should have 1 pending records for the same key with latest value")
 
 	// Test inserting tombstone record
-	err = db.InsertPendingRecord(ctx, pool, "test/pending/key2", "", true)
+	err = sync.InsertPendingRecord(ctx, pool, "test/pending/key2", "", true)
 	require.NoError(t, err)
 
 	// Verify tombstone record
@@ -284,7 +283,7 @@ func TestGetLatestRevision(t *testing.T) {
 	defer cancel()
 
 	// Test with empty table
-	latestRevision, err := db.GetLatestRevision(ctx, pool)
+	latestRevision, err := sync.GetLatestRevision(ctx, pool)
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), latestRevision)
 
@@ -299,7 +298,7 @@ func TestGetLatestRevision(t *testing.T) {
 	require.NoError(t, err)
 
 	// Test latest revision (should ignore -1 pending records)
-	latestRevision, err = db.GetLatestRevision(ctx, pool)
+	latestRevision, err = sync.GetLatestRevision(ctx, pool)
 	require.NoError(t, err)
 	assert.Equal(t, int64(150), latestRevision)
 }
@@ -327,7 +326,7 @@ func TestPendingRecordFiltering(t *testing.T) {
 	require.NoError(t, err)
 
 	// Test GetPendingRecords only returns revision = -1
-	pendingRecords, err := db.GetPendingRecords(ctx, pool)
+	pendingRecords, err := sync.GetPendingRecords(ctx, pool)
 	require.NoError(t, err)
 	assert.Len(t, pendingRecords, 3)
 
@@ -345,7 +344,7 @@ func TestPendingRecordFiltering(t *testing.T) {
 	for _, record := range pendingRecords {
 		if record.Key == "test/filter/pending2" {
 			assert.True(t, record.Tombstone)
-			assert.Nil(t, record.Value)
+			assert.Equal(t, "", record.Value) // Empty string for tombstones
 		}
 	}
 }
@@ -362,22 +361,22 @@ func TestConflictResolution(t *testing.T) {
 	defer cancel()
 
 	// Insert a pending record
-	err := db.InsertPendingRecord(ctx, pool, "test/conflict/key1", "pending_value", false)
+	err := sync.InsertPendingRecord(ctx, pool, "test/conflict/key1", "pending_value", false)
 	require.NoError(t, err)
 
 	// Verify it's pending
-	pendingRecords, err := db.GetPendingRecords(ctx, pool)
+	pendingRecords, err := sync.GetPendingRecords(ctx, pool)
 	require.NoError(t, err)
 	assert.Len(t, pendingRecords, 1)
 	assert.Equal(t, "test/conflict/key1", pendingRecords[0].Key)
 	assert.Equal(t, int64(-1), pendingRecords[0].Revision)
 
 	// Simulate etcd sync by updating revision
-	err = db.UpdateRevision(ctx, pool, "test/conflict/key1", 300)
+	err = sync.UpdateRevision(ctx, pool, "test/conflict/key1", 300)
 	require.NoError(t, err)
 
 	// Verify record is no longer pending
-	pendingAfterUpdate, err := db.GetPendingRecords(ctx, pool)
+	pendingAfterUpdate, err := sync.GetPendingRecords(ctx, pool)
 	require.NoError(t, err)
 	assert.Len(t, pendingAfterUpdate, 0)
 
@@ -391,7 +390,7 @@ func TestConflictResolution(t *testing.T) {
 	assert.Equal(t, int64(300), revision)
 
 	// Test updating non-existent pending record (should fail gracefully)
-	err = db.UpdateRevision(ctx, pool, "test/conflict/nonexistent", 400)
+	err = sync.UpdateRevision(ctx, pool, "test/conflict/nonexistent", 400)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no pending record found")
 }
@@ -411,10 +410,10 @@ func TestPerformanceOpsPerSecond(t *testing.T) {
 	recordCount := 1000
 	start := time.Now()
 
-	records := make([]db.KeyValueRecord, recordCount)
+	records := make([]sync.KeyValueRecord, recordCount)
 	for i := 0; i < recordCount; i++ {
 		value := fmt.Sprintf("test_value_%d", i)
-		records[i] = db.KeyValueRecord{
+		records[i] = sync.KeyValueRecord{
 			Key:       fmt.Sprintf("test/perf/key%d", i),
 			Value:     value,
 			Revision:  int64(i + 1),
@@ -423,7 +422,7 @@ func TestPerformanceOpsPerSecond(t *testing.T) {
 		}
 	}
 
-	err := db.BulkInsert(ctx, pool, records)
+	err := sync.BulkInsert(ctx, pool, records)
 	require.NoError(t, err)
 
 	elapsed := time.Since(start)
@@ -454,11 +453,11 @@ func TestPerformanceSyncLatency(t *testing.T) {
 		// Insert pending record
 		key := fmt.Sprintf("test/latency/key%d", i)
 		value := fmt.Sprintf("test_value_%d", i)
-		err := db.InsertPendingRecord(ctx, pool, key, value, false)
+		err := sync.InsertPendingRecord(ctx, pool, key, value, false)
 		require.NoError(t, err)
 
 		// Update revision (simulating sync completion)
-		err = db.UpdateRevision(ctx, pool, key, int64(i+1))
+		err = sync.UpdateRevision(ctx, pool, key, int64(i+1))
 		require.NoError(t, err)
 
 		latency := time.Since(start)

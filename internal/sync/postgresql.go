@@ -28,7 +28,7 @@ type PgxIface interface {
 // KeyValueRecord represents a key-value record in the etcd table with revision status encoding
 type KeyValueRecord struct {
 	Key       string
-	Value     string // nullable for tombstones
+	Value     string // nullable for tombstones in database, empty string in code
 	Revision  int64  // -1 for pending sync to etcd, >0 for real etcd revision
 	Ts        time.Time
 	Tombstone bool
@@ -133,7 +133,13 @@ func BulkInsert(ctx context.Context, pool PgxIface, records []KeyValueRecord) er
 			  ts = EXCLUDED.ts, value = EXCLUDED.value, tombstone = EXCLUDED.tombstone`
 
 	for _, record := range records {
-		batch.Queue(query, record.Ts, record.Key, record.Value, record.Revision, record.Tombstone)
+		var value interface{}
+		if record.Tombstone {
+			value = nil // Insert NULL for tombstones
+		} else {
+			value = record.Value
+		}
+		batch.Queue(query, record.Ts, record.Key, value, record.Revision, record.Tombstone)
 	}
 
 	br := pool.SendBatch(ctx, batch)
@@ -163,8 +169,27 @@ func GetPendingRecords(ctx context.Context, pool PgxIface) ([]KeyValueRecord, er
 	}
 	defer rows.Close()
 
-	records, err := pgx.CollectRows(rows, pgx.RowToStructByNameLax[KeyValueRecord]) // ensure rows are closed in case of early return
-	if err != nil {
+	var records []KeyValueRecord
+	for rows.Next() {
+		var record KeyValueRecord
+		var value *string
+
+		err := rows.Scan(&record.Key, &value, &record.Revision, &record.Ts, &record.Tombstone)
+		if err != nil {
+			return nil, fmt.Errorf("error scanning pending record: %w", err)
+		}
+
+		// Handle NULL value for tombstones
+		if value != nil {
+			record.Value = *value
+		} else {
+			record.Value = ""
+		}
+
+		records = append(records, record)
+	}
+
+	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("error iterating pending records: %w", err)
 	}
 
@@ -251,7 +276,14 @@ func InsertPendingRecord(ctx context.Context, pool PgxIface, key string, value s
 		SET value = EXCLUDED.value, ts = CURRENT_TIMESTAMP, tombstone = EXCLUDED.tombstone;
 	`
 
-	_, err := pool.Exec(ctx, query, key, value, tombstone)
+	var valueParam interface{}
+	if tombstone {
+		valueParam = nil // Insert NULL for tombstones
+	} else {
+		valueParam = value
+	}
+
+	_, err := pool.Exec(ctx, query, key, valueParam, tombstone)
 	if err != nil {
 		return fmt.Errorf("failed to insert pending record: %w", err)
 	}

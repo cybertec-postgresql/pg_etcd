@@ -2,7 +2,7 @@
 CREATE TABLE etcd (
 	ts timestamp with time zone NOT NULL DEFAULT now(),
 	key text NOT NULL,
-	value text NOT NULL,
+	value text,
 	revision bigint NOT NULL,
 	tombstone boolean NOT NULL DEFAULT false,
 	PRIMARY KEY(key, revision)
