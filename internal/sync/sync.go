@@ -10,8 +10,6 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
-const InvalidRevision = -1
-
 // Service orchestrates bidirectional synchronization between etcd and PostgreSQL
 type Service struct {
 	pgPool          PgxIface
@@ -140,8 +138,6 @@ func (s *Service) syncEtcdToPostgreSQL(ctx context.Context) error {
 				if err != nil {
 					logrus.WithError(err).WithField("key", string(event.Kv.Key)).Error("Failed to process etcd event after retries")
 					// Continue processing other events rather than failing entirely
-				} else {
-					latestRevision = event.Kv.ModRevision
 				}
 			}
 		}
@@ -261,7 +257,7 @@ func (s *Service) processPendingRecord(ctx context.Context, record KeyValueRecor
 			}
 			newRevision = resp.Header.Revision
 			return nil
-		}, "etcd_delete")
+		})
 
 		if err != nil {
 			logrus.WithError(err).WithFields(logrus.Fields{
@@ -284,7 +280,7 @@ func (s *Service) processPendingRecord(ctx context.Context, record KeyValueRecor
 			}
 			newRevision = resp.Header.Revision
 			return nil
-		}, "etcd_put")
+		})
 
 		if err != nil {
 			logrus.WithError(err).WithFields(logrus.Fields{

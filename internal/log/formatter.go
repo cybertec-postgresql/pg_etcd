@@ -1,3 +1,4 @@
+// Package log provides a custom logrus formatter
 package log
 
 import (
@@ -11,6 +12,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+// NewFormatter creates a new custom logrus formatter
 func NewFormatter(noColors bool) *Formatter {
 	return &Formatter{
 		HideKeys: false,

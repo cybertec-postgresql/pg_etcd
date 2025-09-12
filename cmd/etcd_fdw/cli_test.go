@@ -2,7 +2,6 @@
 package main
 
 import (
-	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -125,12 +124,8 @@ func TestCLIParsing(t *testing.T) {
 // TestCLIEnvironmentVariables tests that CLI can read from environment variables
 func TestCLIEnvironmentVariables(t *testing.T) {
 	// Set environment variables
-	os.Setenv("ETCD_FDW_POSTGRES_DSN", "postgres://env:pass@localhost:5432/envdb")
-	os.Setenv("ETCD_FDW_ETCD_DSN", "etcd://localhost:2379,localhost:2380/")
-	defer func() {
-		os.Unsetenv("ETCD_FDW_POSTGRES_DSN")
-		os.Unsetenv("ETCD_FDW_ETCD_DSN")
-	}()
+	t.Setenv("ETCD_FDW_POSTGRES_DSN", "postgres://env:pass@localhost:5432/envdb")
+	t.Setenv("ETCD_FDW_ETCD_DSN", "etcd://localhost:2379,localhost:2380/")
 
 	// This will fail because ParseCLI function doesn't exist yet
 	config, err := ParseCLI([]string{})
@@ -144,12 +139,8 @@ func TestCLIEnvironmentVariables(t *testing.T) {
 // TestCLIFlagPrecedence tests that command-line flags override environment variables
 func TestCLIFlagPrecedence(t *testing.T) {
 	// Set environment variables
-	os.Setenv("ETCD_FDW_POSTGRES_DSN", "postgres://env:pass@localhost:5432/envdb")
-	os.Setenv("ETCD_FDW_ETCD_DSN", "etcd://localhost:2379/")
-	defer func() {
-		os.Unsetenv("ETCD_FDW_POSTGRES_DSN")
-		os.Unsetenv("ETCD_FDW_ETCD_DSN")
-	}()
+	t.Setenv("ETCD_FDW_POSTGRES_DSN", "postgres://env:pass@localhost:5432/envdb")
+	t.Setenv("ETCD_FDW_ETCD_DSN", "etcd://localhost:2379/")
 
 	// Command-line flags should override environment
 	args := []string{

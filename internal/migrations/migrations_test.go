@@ -69,7 +69,7 @@ func TestMigrationWithRealDatabase(t *testing.T) {
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, dsn)
 	require.NoError(t, err, "Should connect to test database")
-	defer conn.Close(ctx)
+	defer func() { _ = conn.Close(ctx) }()
 
 	// Apply migrations
 	err = Apply(ctx, conn) // Use the Apply function instead of migrator method
@@ -102,7 +102,7 @@ func TestMigrationFunctions(t *testing.T) {
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, dsn)
 	require.NoError(t, err, "Should connect to test database")
-	defer conn.Close(ctx)
+	defer func() { _ = conn.Close(ctx) }()
 
 	// Apply migrations first
 	err = Apply(ctx, conn)
@@ -163,7 +163,7 @@ func getTestDSN(t *testing.T) string {
 
 	// Cleanup container when test ends
 	t.Cleanup(func() {
-		pgContainer.Terminate(ctx)
+		_ = pgContainer.Terminate(ctx)
 	})
 
 	// Get connection string
