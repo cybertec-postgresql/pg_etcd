@@ -54,7 +54,7 @@ func (c *EtcdClient) WatchPrefix(ctx context.Context, startRevision int64) clien
 		opts = append(opts, clientv3.WithRev(startRevision+1))
 	}
 
-	watchChan := c.Client.Watch(ctx, c.prefix, opts...)
+	watchChan := c.Watch(ctx, c.prefix, opts...)
 	logrus.WithFields(logrus.Fields{
 		"prefix":   c.prefix,
 		"revision": startRevision,
@@ -65,7 +65,7 @@ func (c *EtcdClient) WatchPrefix(ctx context.Context, startRevision int64) clien
 
 // GetAllKeys retrieves all key-value pairs with the given prefix for initial sync
 func (c *EtcdClient) GetAllKeys(ctx context.Context, prefix string) ([]KeyValueRecord, error) {
-	resp, err := c.Client.Get(ctx, prefix, clientv3.WithPrefix(), clientv3.WithSort(clientv3.SortByKey, clientv3.SortAscend))
+	resp, err := c.Get(ctx, prefix, clientv3.WithPrefix(), clientv3.WithSort(clientv3.SortByKey, clientv3.SortAscend))
 	if err != nil {
 		return nil, fmt.Errorf("failed to get all keys: %w", err)
 	}
@@ -90,59 +90,6 @@ func (c *EtcdClient) GetAllKeys(ctx context.Context, prefix string) ([]KeyValueR
 	return pairs, nil
 }
 
-// Put stores a key-value pair in etcd
-func (c *EtcdClient) Put(ctx context.Context, key, value string) (*clientv3.PutResponse, error) {
-	resp, err := c.Client.Put(ctx, key, value)
-	if err != nil {
-		return nil, fmt.Errorf("failed to put key %s: %w", key, err)
-	}
-
-	logrus.WithFields(logrus.Fields{
-		"key":      key,
-		"revision": resp.Header.Revision,
-	}).Debug("Put key to etcd")
-
-	return resp, nil
-}
-
-// Delete removes a key from etcd
-func (c *EtcdClient) Delete(ctx context.Context, key string) (*clientv3.DeleteResponse, error) {
-	resp, err := c.Client.Delete(ctx, key)
-	if err != nil {
-		return nil, fmt.Errorf("failed to delete key %s: %w", key, err)
-	}
-
-	logrus.WithFields(logrus.Fields{
-		"key":      key,
-		"revision": resp.Header.Revision,
-		"deleted":  resp.Deleted,
-	}).Debug("Deleted key from etcd")
-
-	return resp, nil
-}
-
-// Get retrieves a single key from etcd
-func (c *EtcdClient) Get(ctx context.Context, key string) (*KeyValueRecord, error) {
-	resp, err := c.Client.Get(ctx, key)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get key %s: %w", key, err)
-	}
-
-	if len(resp.Kvs) == 0 {
-		return nil, nil // Key not found
-	}
-
-	kv := resp.Kvs[0]
-	value := string(kv.Value)
-
-	return &KeyValueRecord{
-		Key:       string(kv.Key),
-		Value:     value,
-		Revision:  kv.ModRevision,
-		Tombstone: false,
-	}, nil
-}
-
 // NewEtcdClientWithRetry creates a new etcd client with retry logic
 func NewEtcdClientWithRetry(ctx context.Context, dsn string) (*EtcdClient, error) {
 	config := DefaultRetryConfig()
@@ -158,7 +105,7 @@ func NewEtcdClientWithRetry(ctx context.Context, dsn string) (*EtcdClient, error
 		// Test the connection
 		if _, testErr := client.Get(ctx, "healthcheck"); testErr != nil {
 			if client != nil {
-				client.Close()
+				_ = client.Close()
 			}
 			return testErr
 		}
@@ -243,7 +190,7 @@ func (c *EtcdClient) WatchWithRecovery(ctx context.Context, startRevision int64)
 }
 
 // RetryEtcdOperation retries an etcd operation with exponential backoff
-func RetryEtcdOperation(ctx context.Context, operation func() error, operationName string) error {
+func RetryEtcdOperation(ctx context.Context, operation func() error) error {
 	config := DefaultRetryConfig()
 	return RetryWithBackoff(ctx, config, operation)
 }

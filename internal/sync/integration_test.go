@@ -87,9 +87,9 @@ func setupTestContainers(t *testing.T) (*pgxpool.Pool, *EtcdClient, func()) {
 
 	cleanup := func() {
 		pool.Close()
-		etcdClient.Close()
-		pgContainer.Terminate(ctx)
-		etcdContainer.Terminate(ctx)
+		_ = etcdClient.Close()
+		_ = pgContainer.Terminate(ctx)
+		_ = etcdContainer.Terminate(ctx)
 	}
 
 	return pool, etcdClient, cleanup

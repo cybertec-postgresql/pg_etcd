@@ -196,12 +196,6 @@ func NewWithRetry(ctx context.Context, databaseURL string, callbacks ...func(*pg
 	return pool, nil
 }
 
-// RetryOperation retries a database operation with exponential backoff
-func RetryOperation(ctx context.Context, operation func() error, operationName string) error {
-	config := DefaultRetryConfig()
-	return RetryWithBackoff(ctx, config, operation)
-}
-
 // InsertPendingRecord inserts a new record with revision -1 (pending sync to etcd)
 func InsertPendingRecord(ctx context.Context, pool PgxIface, key string, value string, tombstone bool) error {
 	query := `

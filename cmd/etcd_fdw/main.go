@@ -144,7 +144,7 @@ func main() {
 	if err != nil {
 		logrus.WithError(err).Fatal("Failed to connect to etcd after retries")
 	}
-	defer etcdClient.Close()
+	defer func() { _ = etcdClient.Close() }()
 
 	// Parse polling interval
 	pollingInterval, err := time.ParseDuration(config.PollingInterval)
