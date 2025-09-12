@@ -1,43 +1,30 @@
-version: 2
-
-run:
-  timeout: 5m
-
+version: "2"
 linters:
   enable:
-    - errcheck
-    - govet
-    - ineffassign
-    - staticcheck
-    - unused
-    - goconst
     - gocyclo
     - misspell
-    - dupl
-    - unconvert
-    - whitespace
     - revive
-
-linters-settings:
-  gocyclo:
-    min-complexity: 15
-  dupl:
-    threshold: 100
-  goconst:
-    min-len: 2
-    min-occurrences: 2
-  misspell:
-    locale: US
-  revive:
+  settings:
+    gocyclo:
+      min-complexity: 15
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
     rules:
-      - name: exported
-        disabled: true
-
-issues:
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - goconst
-    - path: cmd/
-      linters:
-        - gocyclo
+      - path: (.+)\.go$
+        text: SA5008   # ignore staticcheck for go-flags
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
