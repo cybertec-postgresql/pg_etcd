@@ -11,22 +11,11 @@ import (
 
 	"github.com/sirupsen/logrus"
 	clientv3 "go.etcd.io/etcd/client/v3"
-
-	"github.com/cybertec-postgresql/etcd_fdw/internal/retry"
 )
 
 // EtcdClient handles all etcd operations for PostgreSQL synchronization
 type EtcdClient struct {
 	*clientv3.Client
-	dsn string
-}
-
-// KeyValuePair represents a key-value pair from etcd
-type KeyValuePair struct {
-	Key       string
-	Value     string // nullable for tombstones
-	Revision  int64
-	Tombstone bool
 }
 
 // NewEtcdClient creates a new etcd client with DSN parsing
@@ -45,7 +34,6 @@ func NewEtcdClient(dsn string) (*EtcdClient, error) {
 
 	return &EtcdClient{
 		Client: client,
-		dsn:    dsn,
 	}, nil
 }
 
@@ -74,16 +62,16 @@ func (c *EtcdClient) WatchPrefix(ctx context.Context, prefix string, startRevisi
 }
 
 // GetAllKeys retrieves all key-value pairs with the given prefix for initial sync
-func (c *EtcdClient) GetAllKeys(ctx context.Context, prefix string) ([]KeyValuePair, error) {
+func (c *EtcdClient) GetAllKeys(ctx context.Context, prefix string) ([]KeyValueRecord, error) {
 	resp, err := c.Client.Get(ctx, prefix, clientv3.WithPrefix(), clientv3.WithSort(clientv3.SortByKey, clientv3.SortAscend))
 	if err != nil {
 		return nil, fmt.Errorf("failed to get all keys: %w", err)
 	}
 
-	pairs := make([]KeyValuePair, len(resp.Kvs))
+	pairs := make([]KeyValueRecord, len(resp.Kvs))
 	for i, kv := range resp.Kvs {
 		value := string(kv.Value)
-		pairs[i] = KeyValuePair{
+		pairs[i] = KeyValueRecord{
 			Key:       string(kv.Key),
 			Value:     value,
 			Revision:  kv.ModRevision,
@@ -132,7 +120,7 @@ func (c *EtcdClient) Delete(ctx context.Context, key string) (*clientv3.DeleteRe
 }
 
 // Get retrieves a single key from etcd
-func (c *EtcdClient) Get(ctx context.Context, key string) (*KeyValuePair, error) {
+func (c *EtcdClient) Get(ctx context.Context, key string) (*KeyValueRecord, error) {
 	resp, err := c.Client.Get(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get key %s: %w", key, err)
@@ -145,7 +133,7 @@ func (c *EtcdClient) Get(ctx context.Context, key string) (*KeyValuePair, error)
 	kv := resp.Kvs[0]
 	value := string(kv.Value)
 
-	return &KeyValuePair{
+	return &KeyValueRecord{
 		Key:       string(kv.Key),
 		Value:     value,
 		Revision:  kv.ModRevision,
@@ -155,10 +143,10 @@ func (c *EtcdClient) Get(ctx context.Context, key string) (*KeyValuePair, error)
 
 // NewEtcdClientWithRetry creates a new etcd client with retry logic
 func NewEtcdClientWithRetry(ctx context.Context, dsn string) (*EtcdClient, error) {
-	config := retry.EtcdDefaults()
+	config := DefaultRetryConfig()
 
 	var client *EtcdClient
-	err := retry.WithOperation(ctx, config, func() error {
+	err := RetryWithBackoff(ctx, config, func() error {
 		var attemptErr error
 		client, attemptErr = NewEtcdClient(dsn)
 		if attemptErr != nil {
@@ -174,7 +162,7 @@ func NewEtcdClientWithRetry(ctx context.Context, dsn string) (*EtcdClient, error
 		}
 
 		return nil
-	}, "etcd connect")
+	})
 
 	if err != nil {
 		logrus.WithError(err).Error("Failed to establish etcd connection after all retries")
@@ -254,18 +242,14 @@ func (c *EtcdClient) WatchWithRecovery(ctx context.Context, prefix string, start
 
 // RetryEtcdOperation retries an etcd operation with exponential backoff
 func RetryEtcdOperation(ctx context.Context, operation func() error, operationName string) error {
-	config := retry.EtcdDefaults()
-	return retry.WithOperation(ctx, config, operation, operationName)
+	config := DefaultRetryConfig()
+	return RetryWithBackoff(ctx, config, operation)
 }
 
-// parseEtcdDSN parses etcd DSN format: etcd://host1:port1[,host2:port2]/[prefix]?param=value
+// parseEtcdDSN parses etcd DSN format: etcd://[user:password@]host1:port1[,host2:port2]/[prefix]?param=value
 func parseEtcdDSN(dsn string) (*clientv3.Config, error) {
 	if dsn == "" {
-		// Use default etcd configuration
-		return &clientv3.Config{
-			Endpoints:   []string{"127.0.0.1:2379"},
-			DialTimeout: 5 * time.Second,
-		}, nil
+		return nil, fmt.Errorf("etcd DSN is required")
 	}
 
 	// Parse the DSN if provided
@@ -273,11 +257,8 @@ func parseEtcdDSN(dsn string) (*clientv3.Config, error) {
 		return nil, fmt.Errorf("etcd DSN must start with etcd://")
 	}
 
-	// Remove etcd:// prefix
-	dsn = strings.TrimPrefix(dsn, "etcd://")
-
-	// Parse as URL to handle query parameters
-	u, err := url.Parse("dummy://" + dsn)
+	// Parse as proper URL
+	u, err := url.Parse(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse DSN: %w", err)
 	}
@@ -293,6 +274,18 @@ func parseEtcdDSN(dsn string) (*clientv3.Config, error) {
 	config := &clientv3.Config{
 		Endpoints:   endpoints,
 		DialTimeout: 5 * time.Second,
+	}
+
+	// Extract username and password if provided
+	if u.User != nil {
+		username := u.User.Username()
+		password, _ := u.User.Password()
+		if username != "" {
+			config.Username = username
+		}
+		if password != "" {
+			config.Password = password
+		}
 	}
 
 	// Parse query parameters

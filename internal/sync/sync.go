@@ -8,8 +8,6 @@ import (
 
 	"github.com/sirupsen/logrus"
 	clientv3 "go.etcd.io/etcd/client/v3"
-
-	"github.com/cybertec-postgresql/etcd_fdw/internal/retry"
 )
 
 const InvalidRevision = -1
@@ -136,9 +134,9 @@ func (s *Service) syncEtcdToPostgreSQL(ctx context.Context) error {
 
 			// Process all events in this watch response
 			for _, event := range watchResp.Events {
-				err := retry.WithOperation(ctx, retry.EtcdDefaults(), func() error {
+				err := RetryWithBackoff(ctx, DefaultRetryConfig(), func() error {
 					return s.processEtcdEvent(ctx, event)
-				}, "process_etcd_event")
+				})
 
 				if err != nil {
 					logrus.WithError(err).WithField("key", string(event.Kv.Key)).Error("Failed to process etcd event after retries")
@@ -233,9 +231,9 @@ func (s *Service) pollAndProcessPendingRecords(ctx context.Context) error {
 
 	// Process each pending record with retry logic
 	for _, record := range pendingRecords {
-		err := retry.WithOperation(ctx, retry.PostgreSQLDefaults(), func() error {
+		err := RetryWithBackoff(ctx, DefaultRetryConfig(), func() error {
 			return s.processPendingRecord(ctx, record)
-		}, "process_pending_record")
+		})
 
 		if err != nil {
 			logrus.WithError(err).WithField("key", record.Key).Error("Failed to process pending record after retries")

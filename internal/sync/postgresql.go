@@ -4,7 +4,6 @@ package sync
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -12,7 +11,6 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/cybertec-postgresql/etcd_fdw/internal/migrations"
-	"github.com/cybertec-postgresql/etcd_fdw/internal/retry"
 )
 
 // PgxIface is common interface for every pgx class
@@ -25,66 +23,12 @@ type PgxIface interface {
 	SendBatch(ctx context.Context, b *pgx.Batch) pgx.BatchResults
 }
 
-// KeyValueRecord represents a key-value record in the etcd table with revision status encoding
-type KeyValueRecord struct {
-	Key       string
-	Value     string // nullable for tombstones in database, empty string in code
-	Revision  int64  // -1 for pending sync to etcd, >0 for real etcd revision
-	Ts        time.Time
-	Tombstone bool
-}
-
-// PoolSettings contains configuration for PostgreSQL connection pools
-type PoolSettings struct {
-	Host         string
-	Port         int
-	Database     string
-	User         string
-	Password     string
-	SSLMode      string
-	MaxConns     int32
-	MinConns     int32
-	MaxConnLife  time.Duration
-	MaxConnIdle  time.Duration
-	HealthCheck  time.Duration
-	ConnAttempts int
-}
-
-// DefaultPoolSettings returns sensible defaults for PostgreSQL connection pooling
-func DefaultPoolSettings() PoolSettings {
-	return PoolSettings{
-		Host:         "localhost",
-		Port:         5432,
-		Database:     "postgres",
-		User:         "postgres",
-		SSLMode:      "prefer",
-		MaxConns:     30,
-		MinConns:     0,
-		MaxConnLife:  time.Hour,
-		MaxConnIdle:  time.Minute * 30,
-		HealthCheck:  time.Minute,
-		ConnAttempts: 10,
-	}
-}
-
-// New creates new connection from PostgreSQL URL with default configuration
+// New creates new connection from PostgreSQL URL
 func New(ctx context.Context, databaseURL string, callbacks ...func(*pgxpool.Config) error) (*pgxpool.Pool, error) {
-	return NewWithConfig(ctx, databaseURL, DefaultPoolSettings(), callbacks...)
-}
-
-// NewWithConfig creates a new PostgreSQL connection pool with the given configuration
-func NewWithConfig(ctx context.Context, databaseURL string, settings PoolSettings, callbacks ...func(*pgxpool.Config) error) (*pgxpool.Pool, error) {
 	connConfig, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse database URL: %w", err)
 	}
-
-	// Apply pool settings
-	connConfig.MaxConns = settings.MaxConns
-	connConfig.MinConns = settings.MinConns
-	connConfig.MaxConnLifetime = settings.MaxConnLife
-	connConfig.MaxConnIdleTime = settings.MaxConnIdle
-	connConfig.HealthCheckPeriod = settings.HealthCheck
 
 	// Set up connection callbacks
 	logger := logrus.WithField("component", "postgresql")
@@ -133,23 +77,14 @@ func BulkInsert(ctx context.Context, pool PgxIface, records []KeyValueRecord) er
 			  ts = EXCLUDED.ts, value = EXCLUDED.value, tombstone = EXCLUDED.tombstone`
 
 	for _, record := range records {
-		var value interface{}
 		if record.Tombstone {
-			value = nil // Insert NULL for tombstones
-		} else {
-			value = record.Value
+			record.Value = "" // Insert empty for tombstones
 		}
-		batch.Queue(query, record.Ts, record.Key, value, record.Revision, record.Tombstone)
+		batch.Queue(query, record.Ts, record.Key, record.Value, record.Revision, record.Tombstone)
 	}
 
-	br := pool.SendBatch(ctx, batch)
-	defer br.Close()
-
-	for i := 0; i < len(records); i++ {
-		_, err := br.Exec()
-		if err != nil {
-			return fmt.Errorf("failed to execute batch insert for record %d: %w", i, err)
-		}
+	if err := pool.SendBatch(ctx, batch).Close(); err != nil {
+		return fmt.Errorf("failed to execute batch insert: %w", err)
 	}
 
 	logrus.WithField("count", len(records)).Info("Bulk inserted/updated records to PostgreSQL")
@@ -232,10 +167,10 @@ func GetLatestRevision(ctx context.Context, pool PgxIface) (int64, error) {
 
 // NewWithRetry creates a new PostgreSQL connection pool with retry logic
 func NewWithRetry(ctx context.Context, databaseURL string, callbacks ...func(*pgxpool.Config) error) (*pgxpool.Pool, error) {
-	config := retry.PostgreSQLDefaults()
+	config := DefaultRetryConfig()
 
 	var pool *pgxpool.Pool
-	err := retry.WithOperation(ctx, config, func() error {
+	err := RetryWithBackoff(ctx, config, func() error {
 		var attemptErr error
 		pool, attemptErr = New(ctx, databaseURL, callbacks...)
 		if attemptErr != nil {
@@ -251,7 +186,7 @@ func NewWithRetry(ctx context.Context, databaseURL string, callbacks ...func(*pg
 		}
 
 		return nil
-	}, "PostgreSQL connect")
+	})
 
 	if err != nil {
 		logrus.WithError(err).Error("Failed to establish PostgreSQL connection after all retries")
@@ -263,8 +198,8 @@ func NewWithRetry(ctx context.Context, databaseURL string, callbacks ...func(*pg
 
 // RetryOperation retries a database operation with exponential backoff
 func RetryOperation(ctx context.Context, operation func() error, operationName string) error {
-	config := retry.PostgreSQLDefaults()
-	return retry.WithOperation(ctx, config, operation, operationName)
+	config := DefaultRetryConfig()
+	return RetryWithBackoff(ctx, config, operation)
 }
 
 // InsertPendingRecord inserts a new record with revision -1 (pending sync to etcd)
@@ -276,7 +211,7 @@ func InsertPendingRecord(ctx context.Context, pool PgxIface, key string, value s
 		SET value = EXCLUDED.value, ts = CURRENT_TIMESTAMP, tombstone = EXCLUDED.tombstone;
 	`
 
-	var valueParam interface{}
+	var valueParam any
 	if tombstone {
 		valueParam = nil // Insert NULL for tombstones
 	} else {
