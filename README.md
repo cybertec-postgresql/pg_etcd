@@ -1,3 +1,5 @@
+[![Coverage Status](https://coveralls.io/repos/github/cybertec-postgresql/etcd_fdw/badge.svg)](https://coveralls.io/github/cybertec-postgresql/etcd_fdw)
+
 # etcd_fdw - Bidirectional Synchronization
 
 ## Overview
