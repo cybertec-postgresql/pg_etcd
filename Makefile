@@ -4,18 +4,22 @@
 
 # Build variables
 BINARY_NAME=pg_etcd
+DOCKER_IMAGE=cybertecpostgresql/$(BINARY_NAME)
 VERSION?=dev
 BUILD_DIR=.
-LDFLAGS=-ldflags="-X main.version=$(VERSION)"
+LDFLAGS:=-X main.version=$(VERSION) -X main.date=$(shell date -u +%Y-%m-%dT%H:%M:%SZ) -X main.commit=$(shell git rev-parse --short HEAD)
 
 # Default target
 .DEFAULT_GOAL := help
+
+foo:
+	@echo $(LDFLAGS)
 
 ## Build the binary
 build:
 	@echo "Building $(BINARY_NAME)..."
 	@mkdir -p $(BUILD_DIR)
-	@go build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/pg_etcd
+	@go build -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/pg_etcd
 
 ## Run tests
 test:
@@ -56,6 +60,20 @@ build-all:
 	@GOOS=darwin GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-amd64 ./cmd/pg_etcd
 	@GOOS=darwin GOARCH=arm64 go build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-arm64 ./cmd/pg_etcd
 	@GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-windows-amd64.exe ./cmd/pg_etcd
+
+## Build Docker image
+docker-build:
+	@echo "Building Docker image..."
+	@docker build -t $(DOCKER_IMAGE):$(VERSION) --build-arg LDFLAGS="$(LDFLAGS)" .
+	@docker tag $(DOCKER_IMAGE):$(VERSION) $(DOCKER_IMAGE):latest
+	@echo "Docker image $(DOCKER_IMAGE):$(VERSION) built successfully."
+
+## Push Docker image to registry
+docker-push: docker-build
+	@echo "Pushing Docker image to registry..."
+	@docker push $(DOCKER_IMAGE):$(VERSION)
+	@docker push $(DOCKER_IMAGE):latest
+	@echo "Docker images pushed successfully."
 
 ## Run the binary (requires PostgreSQL and etcd)
 run: build
