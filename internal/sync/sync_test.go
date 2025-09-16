@@ -1,4 +1,4 @@
-// Package sync provides synchronization testing for etcd_fdw.
+// Package sync provides synchronization testing for pg_etcd.
 package sync
 
 import (

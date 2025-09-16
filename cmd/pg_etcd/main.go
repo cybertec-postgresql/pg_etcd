@@ -1,4 +1,4 @@
-// Package main implements the etcd_fdw binary for bidirectional synchronization
+// Package main implements the pg_etcd binary for bidirectional synchronization
 // between etcd and PostgreSQL.
 package main
 
@@ -13,18 +13,17 @@ import (
 	"github.com/jessevdk/go-flags"
 	"github.com/sirupsen/logrus"
 
-	"github.com/cybertec-postgresql/etcd_fdw/internal/log"
-	"github.com/cybertec-postgresql/etcd_fdw/internal/sync"
+	"github.com/cybertec-postgresql/pg_etcd/internal/log"
+	"github.com/cybertec-postgresql/pg_etcd/internal/sync"
 )
 
 // Config holds the application configuration
 type Config struct {
-	PostgresDSN     string `short:"p" env:"ETCD_FDW_POSTGRES_DSN" long:"postgres-dsn" description:"PostgreSQL connection string"`
-	EtcdDSN         string `short:"e" env:"ETCD_FDW_ETCD_DSN" long:"etcd-dsn" description:"etcd connection string"`
-	LogLevel        string `short:"l" env:"ETCD_FDW_LOG_LEVEL" long:"log-level" description:"Log level: debug|info|warn|error" default:"info"`
+	PostgresDSN     string `short:"p" env:"pg_etcd_POSTGRES_DSN" long:"postgres-dsn" description:"PostgreSQL connection string"`
+	EtcdDSN         string `short:"e" env:"pg_etcd_ETCD_DSN" long:"etcd-dsn" description:"etcd connection string"`
+	LogLevel        string `short:"l" env:"pg_etcd_LOG_LEVEL" long:"log-level" description:"Log level: debug|info|warn|error" default:"info"`
 	PollingInterval string `long:"polling-interval" description:"Polling interval for PostgreSQL to etcd sync" default:"1s"`
 	Version         bool   `short:"v" long:"version" description:"Show version information"`
-	Help            bool
 }
 
 var (
@@ -36,27 +35,20 @@ var (
 // ParseCLI parses command-line arguments and returns the configuration
 func ParseCLI(args []string) (cmdOpts *Config, err error) {
 	cmdOpts = new(Config)
-	parser := flags.NewParser(cmdOpts, flags.HelpFlag)
-	parser.SubcommandsOptional = true            // if not command specified, start monitoring
-	nonParsedArgs, err := parser.ParseArgs(args) // parse and execute subcommand if any
+	parser := flags.NewParser(cmdOpts, flags.Default)
+	_, err = parser.ParseArgs(args) // parse and execute subcommand if any
 	if err != nil {
-		if flagsErr, ok := err.(*flags.Error); ok && flagsErr.Type == flags.ErrHelp {
-			cmdOpts.Help = true
-		}
 		if !flags.WroteHelp(err) {
 			parser.WriteHelp(os.Stdout)
 		}
 		return cmdOpts, err
-	}
-	if len(nonParsedArgs) > 0 { // we don't expect any non-parsed arguments
-		return cmdOpts, fmt.Errorf("unknown argument(s): %v", nonParsedArgs)
 	}
 	return
 }
 
 // ShowVersion prints version information and exits
 func ShowVersion() {
-	fmt.Printf("etcd_fdw version %s\n", version)
+	fmt.Printf("pg_etcd version %s\n", version)
 	if commit != "none" && commit != "" {
 		fmt.Printf("commit: %s\n", commit)
 	}
@@ -85,7 +77,7 @@ func SetupLogging(logLevel string) error {
 		"version": version,
 		"commit":  commit,
 		"pid":     os.Getpid(),
-	}).Info("etcd_fdw logging initialized")
+	}).Info("pg_etcd logging initialized")
 
 	return nil
 }

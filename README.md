@@ -1,10 +1,10 @@
 [![Coverage Status](https://coveralls.io/repos/github/cybertec-postgresql/etcd_fdw/badge.svg)](https://coveralls.io/github/cybertec-postgresql/etcd_fdw)
 
-# etcd_fdw - Bidirectional Synchronization
+# pg_etcd - Bidirectional Synchronization
 
 ## Overview
 
-etcd_fdw provides bidirectional synchronization between etcd and PostgreSQL using a single table architecture with revision status encoding.
+pg_etcd provides bidirectional synchronization between etcd and PostgreSQL using a single table architecture with revision status encoding.
 
 ## Architecture
 
@@ -15,15 +15,15 @@ etcd_fdw provides bidirectional synchronization between etcd and PostgreSQL usin
 ## Installation
 
 ```bash
-go install github.com/cybertec-postgresql/etcd_fdw/cmd/etcd_fdw@latest
+go install github.com/cybertec-postgresql/pg_etcd/cmd/pg_etcd@latest
 ```
 
 ## Usage
 
 ```bash
 # Basic usage
-etcd_fdw --postgres-dsn="postgres://user:pass@localhost/db" --etcd-dsn="etcd://localhost:2379/prefix"
+pg_etcd --postgres-dsn="postgres://user:pass@localhost/db" --etcd-dsn="etcd://localhost:2379/prefix"
 
 # With custom polling interval
-etcd_fdw --postgres-dsn="..." --etcd-dsn="..." --polling-interval=2s
+pg_etcd --postgres-dsn="..." --etcd-dsn="..." --polling-interval=2s
 ```

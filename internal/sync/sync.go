@@ -29,7 +29,7 @@ func NewService(pgPool PgxIface, etcdClient *EtcdClient, pollingInterval time.Du
 
 // Start begins the bidirectional synchronization process
 func (s *Service) Start(ctx context.Context) error {
-	logrus.Info("Starting etcd_fdw bidirectional synchronization")
+	logrus.Info("Starting pg_etcd bidirectional synchronization")
 
 	// Perform initial sync from etcd to PostgreSQL
 	if err := s.initialSync(ctx); err != nil {
