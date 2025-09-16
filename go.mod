@@ -1,4 +1,4 @@
-module github.com/cybertec-postgresql/etcd_fdw
+module github.com/cybertec-postgresql/pg_etcd
 
 go 1.25
 

@@ -1,4 +1,4 @@
-// Package migrations provides migration testing for etcd_fdw database migrations.
+// Package migrations provides migration testing for pg_etcd database migrations.
 package migrations
 
 import (

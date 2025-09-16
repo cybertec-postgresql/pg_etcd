@@ -10,7 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/sirupsen/logrus"
 
-	"github.com/cybertec-postgresql/etcd_fdw/internal/migrations"
+	"github.com/cybertec-postgresql/pg_etcd/internal/migrations"
 )
 
 // PgxIface is common interface for every pgx class

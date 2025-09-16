@@ -1,4 +1,4 @@
-// Package migrations contains database migration definitions and functionality for etcd_fdw.
+// Package migrations contains database migration definitions and functionality for pg_etcd.
 package migrations
 
 import (
@@ -47,7 +47,7 @@ func getMigrator() (*migrator.Migrator, error) {
 	once.Do(func() {
 		migratorInstance, err = migrator.New(
 			migrations(),
-			migrator.TableName("etcd_fdw_migrations"),
+			migrator.TableName("pg_etcd_migrations"),
 		)
 	})
 	return migratorInstance, err

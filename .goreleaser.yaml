@@ -1,7 +1,7 @@
 version: 2
 
 builds:
-- main: ./cmd/etcd_fdw
+- main: ./cmd/pg_etcd
   env:
     - CGO_ENABLED=0
   goos:

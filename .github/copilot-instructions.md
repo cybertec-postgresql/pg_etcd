@@ -1,8 +1,8 @@
-# GitHub Copilot Instructions: etcd_fdw Single Package Architecture
+# GitHub Copilot Instructions: pg_etcd Single Package Architecture
 
 ## Project Context
 
-**Tool**: etcd_fdw - Bidirectional synchronization between etcd and PostgreSQL  
+**Tool**: pg_etcd - Bidirectional synchronization between etcd and PostgreSQL  
 **Language**: Go 1.25  
 **Architecture**: Single package consolidation (refactoring from separate internal/etcd and internal/db packages)  
 **Database**: PostgreSQL with single `etcd` table using revision status encoding  
