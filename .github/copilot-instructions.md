@@ -3,7 +3,7 @@
 ## Project Context
 
 **Tool**: pg_etcd - Bidirectional synchronization between etcd and PostgreSQL  
-**Language**: Go 1.25  
+**Language**: Go 1.26  
 **Architecture**: Single package consolidation (refactoring from separate internal/etcd and internal/db packages)  
 **Database**: PostgreSQL with single `etcd` table using revision status encoding  
 **Key Principle**: KISS (Keep It Simple, Stupid) - maximum simplicity, minimal complexity
